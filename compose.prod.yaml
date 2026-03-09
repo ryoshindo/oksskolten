@@ -1,0 +1,39 @@
+services:
+  server:
+    build:
+      target: runtime
+    command: []
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+    ports: !override []
+    expose:
+      - "3000"
+
+  meilisearch:
+    environment:
+      MEILI_ENV: production
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+    ports: !override []
+
+  rss-bridge:
+    ports: !override []
+
+  flaresolverr:
+    ports: !override []
+
+  frontend:
+    deploy:
+      replicas: 0
+
+  cloudflared:
+    image: cloudflare/cloudflared
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    networks:
+      - internal
+    restart: unless-stopped
