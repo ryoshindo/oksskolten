@@ -35,7 +35,11 @@ function convertMessagesToGemini(messages: Message[]): Content[] {
           functionResponse: {
             id: tr.tool_use_id,
             name: toolIdToName.get(tr.tool_use_id) || 'unknown',
-            response: typeof tr.content === 'string' ? JSON.parse(tr.content || '{}') : tr.content,
+            response: (() => {
+              const parsed = typeof tr.content === 'string' ? JSON.parse(tr.content || '{}') : tr.content
+              // Gemini requires response to be an object, not an array
+              return Array.isArray(parsed) ? { results: parsed } : parsed
+            })(),
           },
         }))
         result.push({ role: 'user', parts })

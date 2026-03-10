@@ -224,7 +224,7 @@ function AnimatedRoutes() {
           ? { type: 'tween', duration: 0.25, ease: [0.32, 0.72, 0, 1] }
           : { duration: 0.15 }
         }
-        style={{ minHeight: '100vh' }}
+        style={{ minHeight: '100dvh' }}
       >
         <Routes location={location}>
           <Route element={<AppLayout />}>
