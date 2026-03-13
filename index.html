@@ -39,14 +39,11 @@
         r.colorScheme = d ? 'dark' : 'light';
         var bg = localStorage.getItem('theme-bg') || (d ? '#111111' : '#ffffff');
         r.backgroundColor = bg;
-        var c = localStorage.getItem('theme-bg');
-        if(c){
-          r.setProperty('--color-bg', c);
-          r.setProperty('--color-bg-card', c);
-          r.setProperty('--color-bg-header', c);
-          var h = c.match(/[a-f\d]{2}/gi);
-          if(h) r.setProperty('--color-bg-header-rgb', h.map(function(x){return parseInt(x,16)}).join(' '));
-        }
+        r.setProperty('--color-bg', bg);
+        r.setProperty('--color-bg-card', bg);
+        r.setProperty('--color-bg-header', bg);
+        var h = bg.match(/[a-f\d]{2}/gi);
+        if(h) r.setProperty('--color-bg-header-rgb', h.map(function(x){return parseInt(x,16)}).join(' '));
       })();
     </script>
   </head>
