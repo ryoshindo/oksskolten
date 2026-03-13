@@ -165,7 +165,7 @@ export const ArticleList = forwardRef<ArticleListHandle, object>(function Articl
       .then(() => globalMutate(
         (key: string) => typeof key === 'string' && key.startsWith('/api/feeds'),
       ))
-      .catch((err) => console.warn('Failed to mark articles as seen:', err))
+      .catch(() => {})
   }, [globalMutate])
 
   const scheduleFlush = useCallback(() => {

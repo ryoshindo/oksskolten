@@ -119,7 +119,7 @@ export function useFeedActions({
       const result = await startFeedFetch(feed.id)
       onFetchComplete?.(result)
     } catch (err) {
-      console.error('[FeedList] re-detect failed:', err)
+      void err
     }
   }
 

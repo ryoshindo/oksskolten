@@ -90,7 +90,6 @@ export function useFetchProgress() {
         }
       })
     } catch (err) {
-      console.error('[useFetchProgress] feed fetch error:', err)
       hadError = true
     } finally {
       setProgress(prev => {
@@ -129,7 +128,7 @@ export function useFetchProgress() {
         }
       })
     } catch (err) {
-      console.error('[useFetchProgress] subscribe error:', err)
+      void err
     } finally {
       setProgress(prev => {
         const next = new Map(prev)

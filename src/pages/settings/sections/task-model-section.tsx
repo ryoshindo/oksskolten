@@ -14,11 +14,13 @@ import {
 import type { ModelGroup } from '../../../data/aiModels'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectGroup, SelectLabel, SelectItem } from '@/components/ui/select'
 import type { Settings } from '../../../hooks/use-settings'
+import type { TranslateFn } from '../../../lib/i18n'
 
-type TFunc = (key: any, params?: Record<string, string>) => string
+type TFunc = TranslateFn
+type MessageKey = Parameters<TFunc>[0]
 
 interface TaskConfig {
-  labelKey: string
+  labelKey: MessageKey
   providerValue: string
   setProvider: (v: string) => void
   modelValue: string
@@ -27,32 +29,35 @@ interface TaskConfig {
   hasTranslateServices?: boolean
 }
 
+const SWR_KEY_OPTS = { revalidateOnFocus: false } as const
+
 export function TaskModelSection({ settings, t }: { settings: Settings; t: TFunc }) {
-  const llmKeyStatuses = LLM_API_PROVIDERS.map(p =>
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useSWR<{ configured: boolean }>(`/api/settings/api-keys/${p}`, fetcher, { revalidateOnFocus: false }),
-  )
-  const translateKeyStatuses = TRANSLATE_SERVICE_PROVIDERS.map(p =>
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useSWR<{ configured: boolean }>(`/api/settings/api-keys/${p}`, fetcher, { revalidateOnFocus: false }),
-  )
+  // Call useSWR at top level for each provider (hooks must not be called in loops)
+  const anthropicKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/anthropic`, fetcher, SWR_KEY_OPTS)
+  const geminiKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/gemini`, fetcher, SWR_KEY_OPTS)
+  const openaiKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/openai`, fetcher, SWR_KEY_OPTS)
+  const googleTranslateKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/google-translate`, fetcher, SWR_KEY_OPTS)
+  const deeplKey = useSWR<{ configured: boolean }>(`/api/settings/api-keys/deepl`, fetcher, SWR_KEY_OPTS)
   const { data: claudeCodeStatus } = useSWR<{ loggedIn?: boolean; error?: string }>(
-    '/api/chat/claude-code-status', fetcher, { revalidateOnFocus: false },
+    '/api/chat/claude-code-status', fetcher, SWR_KEY_OPTS,
   )
+
+  const llmKeyStatuses = [anthropicKey, geminiKey, openaiKey]
+  const translateKeyStatuses = [googleTranslateKey, deeplKey]
+
   const claudeCodeReady = !!claudeCodeStatus?.loggedIn
-  const configuredKeysKey = [
-    ...llmKeyStatuses.map(s => s.data?.configured ? '1' : '0'),
-    ...translateKeyStatuses.map(s => s.data?.configured ? '1' : '0'),
-    claudeCodeReady ? '1' : '0',
-  ].join('')
   const configuredKeys = useMemo(() => {
     const map: Record<string, boolean> = {}
     LLM_API_PROVIDERS.forEach((p, i) => { map[p] = !!llmKeyStatuses[i].data?.configured })
     TRANSLATE_SERVICE_PROVIDERS.forEach((p, i) => { map[p] = !!translateKeyStatuses[i].data?.configured })
     map['claude-code'] = claudeCodeReady
     return map
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configuredKeysKey])
+    // Recompute only when any key's configured status changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    anthropicKey.data?.configured, geminiKey.data?.configured, openaiKey.data?.configured,
+    googleTranslateKey.data?.configured, deeplKey.data?.configured, claudeCodeReady,
+  ])
   const hasAnyLlmKey = LLM_API_PROVIDERS.some(p => configuredKeys[p])
   const hasAnyTranslateKey = TRANSLATE_SERVICE_PROVIDERS.some(p => configuredKeys[p])
   const hasAnyKey = hasAnyLlmKey || hasAnyTranslateKey

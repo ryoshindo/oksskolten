@@ -20,8 +20,8 @@ const updateSW = registerSW({
   },
 })
 
-window.addEventListener('online', () => flushOfflineQueue().catch((err) => console.warn('Failed to flush offline queue:', err)))
-if (navigator.onLine) flushOfflineQueue().catch((err) => console.warn('Failed to flush offline queue:', err))
+window.addEventListener('online', () => flushOfflineQueue().catch(() => {}))
+if (navigator.onLine) flushOfflineQueue().catch(() => {})
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

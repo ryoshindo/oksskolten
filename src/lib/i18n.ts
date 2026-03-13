@@ -737,6 +737,8 @@ export const LocaleContext = createContext<LocaleContextValue>({
   setLocale: () => {},
 })
 
+export type TranslateFn = (key: MessageKey, params?: Record<string, string>) => string
+
 export function useI18n() {
   const { locale, setLocale } = useContext(LocaleContext)
   const t = (key: MessageKey, params?: Record<string, string>): string => {

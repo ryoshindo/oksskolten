@@ -164,7 +164,7 @@ export function useSettings() {
     }
 
     if (Object.keys(backfill).length > 0) {
-      apiPatch('/api/settings/preferences', backfill).catch((err) => console.warn('Failed to sync settings backfill:', err))
+      apiPatch('/api/settings/preferences', backfill).catch(() => {})
     }
   }, [prefs, setTheme, setDateMode, setAutoMarkRead, setShowUnreadIndicator, setInternalLinks, setShowThumbnails, setShowFeedActivity, setChatPosition, setArticleOpenMode, setLayout, setMascot, setHighlightTheme, setArticleFont])
 
@@ -195,7 +195,7 @@ export function useSettings() {
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify(patch),
         keepalive: true,
-      }).catch((err) => console.warn('Failed to flush settings:', err))
+      }).catch(() => {})
     }
   }, [])
 
@@ -207,7 +207,7 @@ export function useSettings() {
       const patch = { ...pendingRef.current }
       pendingRef.current = {}
       if (Object.keys(patch).length > 0) {
-        apiPatch('/api/settings/preferences', patch).catch((err) => console.warn('Failed to save settings:', err))
+        apiPatch('/api/settings/preferences', patch).catch(() => {})
       }
     }, SETTINGS_SYNC_DEBOUNCE_MS)
   }, [])

@@ -151,7 +151,7 @@ export function FeedErrorBanner({ lastError, feedId, onMutate, onFetch, override
         await onFetch()
       }
     } catch (err) {
-      console.error('[FeedErrorBanner] re-detect failed:', err)
+      void err
     } finally {
       setPhase('idle')
     }
@@ -163,7 +163,7 @@ export function FeedErrorBanner({ lastError, feedId, onMutate, onFetch, override
       setPhase('fetching')
       await onFetch()
     } catch (err) {
-      console.error('[FeedErrorBanner] fetch failed:', err)
+      void err
     } finally {
       setPhase('idle')
     }
