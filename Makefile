@@ -1,4 +1,4 @@
-.PHONY: help ci test test-server test-client typecheck lint dev dev-down dev-scratch prod prod-down
+.PHONY: help ci test test-server test-client typecheck lint build-demo dev dev-down dev-scratch prod prod-down
 
 COMPOSE ?= docker compose
 
@@ -17,7 +17,7 @@ help: ## Show this help
 # CI
 # ---------------------------------------------------------------------------
 
-ci: typecheck lint test ## Run all CI checks (typecheck + lint + test)
+ci: typecheck lint test build-demo ## Run all CI checks (typecheck + lint + test + demo build)
 
 test: test-server test-client ## Run all tests
 
@@ -32,6 +32,9 @@ typecheck: ## Run TypeScript type checking
 
 lint: ## Run ESLint
 	npm run lint
+
+build-demo: ## Build demo site (catches demo-mode export mismatches)
+	npx vite build --mode demo
 
 # ---------------------------------------------------------------------------
 # Dev  — project name: oksskolten (default), DB: ./data

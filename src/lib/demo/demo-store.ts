@@ -558,13 +558,52 @@ export const demoStore = {
     })
   },
 
+  /** Parse OPML and return preview with duplicate detection (no DB writes). */
+  previewOpml(xml: string): {
+    feeds: { name: string; url: string; rssUrl: string; categoryName: string | null; isDuplicate: boolean }[]
+    totalCount: number
+    duplicateCount: number
+  } {
+    const doc = new DOMParser().parseFromString(xml, 'application/xml')
+    const existingUrls = new Set(feeds.map(f => f.url))
+    const result: { name: string; url: string; rssUrl: string; categoryName: string | null; isDuplicate: boolean }[] = []
+
+    const body = doc.querySelector('body')
+    if (!body) return { feeds: result, totalCount: 0, duplicateCount: 0 }
+
+    const collect = (el: Element, categoryName: string | null) => {
+      const xmlUrl = el.getAttribute('xmlUrl') || ''
+      const htmlUrl = el.getAttribute('htmlUrl') || ''
+      const url = htmlUrl || xmlUrl
+      if (!url) return
+      const name = el.getAttribute('text') || el.getAttribute('title') || url
+      result.push({ name, url, rssUrl: xmlUrl, categoryName, isDuplicate: existingUrls.has(url) })
+    }
+
+    for (const topOutline of body.children) {
+      if (topOutline.tagName !== 'outline') continue
+      if (topOutline.getAttribute('xmlUrl')) {
+        collect(topOutline, null)
+      } else {
+        const catName = topOutline.getAttribute('text') || topOutline.getAttribute('title') || null
+        for (const child of topOutline.children) {
+          if (child.tagName !== 'outline') continue
+          collect(child, catName)
+        }
+      }
+    }
+
+    return { feeds: result, totalCount: result.length, duplicateCount: result.filter(f => f.isDuplicate).length }
+  },
+
   /** Import feeds from an OPML XML string, preserving category hierarchy. */
-  importOpml(xml: string): { imported: number; skipped: number; errors: string[] } {
+  importOpml(xml: string, selectedUrls?: string[]): { imported: number; skipped: number; errors: string[] } {
     const doc = new DOMParser().parseFromString(xml, 'application/xml')
     let imported = 0
     let skipped = 0
     const errors: string[] = []
     const existingUrls = new Set(feeds.map(f => f.url))
+    const selectedUrlSet = selectedUrls ? new Set(selectedUrls) : null
 
     // Build category name → id map from existing feeds + assign new IDs
     const { categories } = this.getCategories()
@@ -583,6 +622,7 @@ export const demoStore = {
       const xmlUrl = el.getAttribute('xmlUrl') || ''
       const url = htmlUrl || xmlUrl
       if (!url) return
+      if (selectedUrlSet && !selectedUrlSet.has(url)) return
       if (existingUrls.has(url)) {
         skipped++
         return

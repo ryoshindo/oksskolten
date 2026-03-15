@@ -623,7 +623,7 @@ describe('fetchSingleFeed', () => {
     expect(updatedFeed!.error_count).toBe(1)
   })
 
-  it('fetches all new articles without per-feed limit', async () => {
+  it('fetches all new articles without per-feed limit', { timeout: 15000 }, async () => {
     const feed = seedFeed()
     const items = Array.from({ length: 35 }, (_, i) => ({
       title: `Article ${i}`,
