@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { fetchAndParseRss, discoverRssUrl, RateLimitError } from './rss.js'
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -9,6 +10,19 @@ const mockSafeFetch = vi.fn()
 vi.mock('./ssrf.js', () => ({
   safeFetch: (...args: unknown[]) => mockSafeFetch(...args),
 }))
+
+// Controllable feedsmith mock — set feedsmithShouldFail = true to force fast-xml-parser fallback
+let feedsmithShouldFail = false
+vi.mock('feedsmith', async (importOriginal) => {
+  const real = await importOriginal<typeof import('feedsmith')>()
+  return {
+    ...real,
+    parseFeed: (...args: Parameters<typeof real.parseFeed>) => {
+      if (feedsmithShouldFail) throw new Error('feedsmith failed')
+      return real.parseFeed(...args)
+    },
+  }
+})
 
 // ---------------------------------------------------------------------------
 // Test data
@@ -130,30 +144,23 @@ function mockResponse(body: string, ok = true, status = 200, contentType = 'appl
 
 describe('fetchAndParseRss', () => {
   beforeEach(() => {
-    vi.resetModules()
     mockSafeFetch.mockReset()
+    feedsmithShouldFail = false
   })
 
-  async function loadModule() {
-    return import('./rss.js')
-  }
-
   it('throws when no RSS URL is configured', async () => {
-    const { fetchAndParseRss } = await loadModule()
     await expect(fetchAndParseRss({ id: 1, name: 'x', url: 'https://x.com' } as any))
       .rejects.toThrow('No RSS URL')
   })
 
   it('throws on HTTP error', async () => {
     mockSafeFetch.mockResolvedValue(mockResponse('', false, 404))
-    const { fetchAndParseRss } = await loadModule()
     await expect(fetchAndParseRss({ id: 1, name: 'x', url: 'https://x.com', rss_url: 'https://x.com/feed' } as any))
       .rejects.toThrow('HTTP 404')
   })
 
   it('parses RSS 2.0 feed via feedsmith', async () => {
     mockSafeFetch.mockResolvedValue(mockResponse(RSS_XML))
-    const { fetchAndParseRss } = await loadModule()
 
     const { items } = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
@@ -169,7 +176,6 @@ describe('fetchAndParseRss', () => {
 
   it('parses Atom feed', async () => {
     mockSafeFetch.mockResolvedValue(mockResponse(ATOM_XML))
-    const { fetchAndParseRss } = await loadModule()
 
     const { items } = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
@@ -181,7 +187,6 @@ describe('fetchAndParseRss', () => {
   })
 
   it('falls back to fast-xml-parser when feedsmith fails', async () => {
-    // Use malformed XML that feedsmith can't parse but fast-xml-parser can handle
     const rssXml = `<?xml version="1.0"?>
 <rss version="2.0">
   <channel>
@@ -194,13 +199,8 @@ describe('fetchAndParseRss', () => {
   </channel>
 </rss>`
 
-    // Mock feedsmith to throw
-    vi.doMock('feedsmith', () => ({
-      parseFeed: () => { throw new Error('feedsmith failed') },
-    }))
-
+    feedsmithShouldFail = true
     mockSafeFetch.mockResolvedValue(mockResponse(rssXml))
-    const { fetchAndParseRss } = await loadModule()
 
     const { items } = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
@@ -210,19 +210,12 @@ describe('fetchAndParseRss', () => {
     expect(items).toHaveLength(1)
     expect(items[0].title).toBe('FXP Item')
     expect(items[0].url).toBe('https://example.com/fxp')
-
-    vi.doUnmock('feedsmith')
   })
 
   it('handles single RSS item (not array)', async () => {
+    feedsmithShouldFail = true
     mockSafeFetch.mockResolvedValue(mockResponse(RSS_SINGLE_ITEM_XML))
 
-    // Force fast-xml-parser path
-    vi.doMock('feedsmith', () => ({
-      parseFeed: () => { throw new Error('skip') },
-    }))
-
-    const { fetchAndParseRss } = await loadModule()
     const { items } = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
       rss_url: 'https://example.com/rss',
@@ -230,18 +223,12 @@ describe('fetchAndParseRss', () => {
 
     expect(items).toHaveLength(1)
     expect(items[0].title).toBe('Only Item')
-
-    vi.doUnmock('feedsmith')
   })
 
   it('uses guid as URL fallback in RSS', async () => {
+    feedsmithShouldFail = true
     mockSafeFetch.mockResolvedValue(mockResponse(RSS_GUID_FALLBACK_XML))
 
-    vi.doMock('feedsmith', () => ({
-      parseFeed: () => { throw new Error('skip') },
-    }))
-
-    const { fetchAndParseRss } = await loadModule()
     const { items } = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
       rss_url: 'https://example.com/rss',
@@ -249,18 +236,12 @@ describe('fetchAndParseRss', () => {
 
     expect(items).toHaveLength(1)
     expect(items[0].url).toBe('https://example.com/guid-1')
-
-    vi.doUnmock('feedsmith')
   })
 
   it('parses Atom with single link (no rel=alternate)', async () => {
+    feedsmithShouldFail = true
     mockSafeFetch.mockResolvedValue(mockResponse(ATOM_SINGLE_LINK_XML))
 
-    vi.doMock('feedsmith', () => ({
-      parseFeed: () => { throw new Error('skip') },
-    }))
-
-    const { fetchAndParseRss } = await loadModule()
     const { items } = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
       rss_url: 'https://example.com/atom',
@@ -268,18 +249,12 @@ describe('fetchAndParseRss', () => {
 
     expect(items).toHaveLength(1)
     expect(items[0].url).toBe('https://example.com/single')
-
-    vi.doUnmock('feedsmith')
   })
 
   it('uses id as URL fallback in Atom', async () => {
+    feedsmithShouldFail = true
     mockSafeFetch.mockResolvedValue(mockResponse(ATOM_ID_FALLBACK_XML))
 
-    vi.doMock('feedsmith', () => ({
-      parseFeed: () => { throw new Error('skip') },
-    }))
-
-    const { fetchAndParseRss } = await loadModule()
     const { items } = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
       rss_url: 'https://example.com/atom',
@@ -287,18 +262,12 @@ describe('fetchAndParseRss', () => {
 
     expect(items).toHaveLength(1)
     expect(items[0].url).toBe('https://example.com/id-entry')
-
-    vi.doUnmock('feedsmith')
   })
 
   it('prefers Atom alternate link over other rels', async () => {
+    feedsmithShouldFail = true
     mockSafeFetch.mockResolvedValue(mockResponse(ATOM_XML))
 
-    vi.doMock('feedsmith', () => ({
-      parseFeed: () => { throw new Error('skip') },
-    }))
-
-    const { fetchAndParseRss } = await loadModule()
     const { items } = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
       rss_url: 'https://example.com/atom',
@@ -307,13 +276,10 @@ describe('fetchAndParseRss', () => {
     // Second entry has both alternate and self links
     const post2 = items.find(i => i.title === 'Atom Post 2')
     expect(post2?.url).toBe('https://example.com/atom-2')
-
-    vi.doUnmock('feedsmith')
   })
 
   it('normalizes dates to ISO format', async () => {
     mockSafeFetch.mockResolvedValue(mockResponse(RSS_XML))
-    const { fetchAndParseRss } = await loadModule()
 
     const { items } = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
@@ -334,42 +300,29 @@ describe('fetchAndParseRss', () => {
     </item>
   </channel>
 </rss>`
+    feedsmithShouldFail = true
     mockSafeFetch.mockResolvedValue(mockResponse(xml))
 
-    vi.doMock('feedsmith', () => ({
-      parseFeed: () => { throw new Error('skip') },
-    }))
-
-    const { fetchAndParseRss } = await loadModule()
     const { items } = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
       rss_url: 'https://example.com/rss',
     } as any)
 
     expect(items[0].published_at).toBeNull()
-
-    vi.doUnmock('feedsmith')
   })
 
   it('throws for unparseable content', async () => {
+    feedsmithShouldFail = true
     mockSafeFetch.mockResolvedValue(mockResponse('<html><body>Not a feed</body></html>'))
 
-    vi.doMock('feedsmith', () => ({
-      parseFeed: () => { throw new Error('not a feed') },
-    }))
-
-    const { fetchAndParseRss } = await loadModule()
     await expect(fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
       rss_url: 'https://example.com/rss',
     } as any)).rejects.toThrow('Could not parse RSS/Atom feed')
-
-    vi.doUnmock('feedsmith')
   })
 
   it('uses rss_bridge_url when rss_url is absent', async () => {
     mockSafeFetch.mockResolvedValue(mockResponse(RSS_XML))
-    const { fetchAndParseRss } = await loadModule()
 
     const { items } = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
@@ -389,7 +342,6 @@ describe('fetchAndParseRss', () => {
 
   it('returns contentHash in result', async () => {
     mockSafeFetch.mockResolvedValue(mockResponse(RSS_XML))
-    const { fetchAndParseRss } = await loadModule()
 
     const result = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
@@ -405,7 +357,6 @@ describe('fetchAndParseRss', () => {
   it('skips parsing when content hash matches last_content_hash', async () => {
     const hash = createHash('sha256').update(RSS_XML).digest('hex')
     mockSafeFetch.mockResolvedValue(mockResponse(RSS_XML))
-    const { fetchAndParseRss } = await loadModule()
 
     const result = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
@@ -420,7 +371,6 @@ describe('fetchAndParseRss', () => {
 
   it('parses normally when content hash differs from last_content_hash', async () => {
     mockSafeFetch.mockResolvedValue(mockResponse(RSS_XML))
-    const { fetchAndParseRss } = await loadModule()
 
     const result = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
@@ -436,7 +386,6 @@ describe('fetchAndParseRss', () => {
 
   it('skips hash check when last_content_hash is null (first fetch)', async () => {
     mockSafeFetch.mockResolvedValue(mockResponse(RSS_XML))
-    const { fetchAndParseRss } = await loadModule()
 
     const result = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
@@ -450,7 +399,6 @@ describe('fetchAndParseRss', () => {
 
   it('returns existing last_content_hash on 304 response', async () => {
     mockSafeFetch.mockResolvedValue(mockResponse('', true, 304))
-    const { fetchAndParseRss } = await loadModule()
 
     const result = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
@@ -467,7 +415,6 @@ describe('fetchAndParseRss', () => {
 
   it('sends conditional headers (ETag/Last-Modified) with request', async () => {
     mockSafeFetch.mockResolvedValue(mockResponse(RSS_XML))
-    const { fetchAndParseRss } = await loadModule()
 
     await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
@@ -495,7 +442,6 @@ describe('fetchAndParseRss', () => {
     const res = mockResponse('', false, 429)
     res.headers.set('retry-after', '120')
     mockSafeFetch.mockResolvedValue(res)
-    const { fetchAndParseRss, RateLimitError } = await loadModule()
 
     try {
       await fetchAndParseRss({
@@ -512,7 +458,6 @@ describe('fetchAndParseRss', () => {
   it('throws RateLimitError on 503 response', async () => {
     const res = mockResponse('', false, 503)
     mockSafeFetch.mockResolvedValue(res)
-    const { fetchAndParseRss, RateLimitError } = await loadModule()
 
     try {
       await fetchAndParseRss({
@@ -531,7 +476,6 @@ describe('fetchAndParseRss', () => {
     const res = mockResponse('', false, 429)
     res.headers.set('retry-after', futureDate)
     mockSafeFetch.mockResolvedValue(res)
-    const { fetchAndParseRss, RateLimitError } = await loadModule()
 
     try {
       await fetchAndParseRss({
@@ -563,7 +507,6 @@ describe('fetchAndParseRss', () => {
   </channel>
 </rss>`
     mockSafeFetch.mockResolvedValue(mockResponse(xml))
-    const { fetchAndParseRss } = await loadModule()
 
     const { items } = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
@@ -584,13 +527,9 @@ describe('fetchAndParseRss', () => {
   </channel>
 </rss>`
 
+    feedsmithShouldFail = true
     mockSafeFetch.mockResolvedValue(mockResponse(xml))
 
-    vi.doMock('feedsmith', () => ({
-      parseFeed: () => { throw new Error('skip') },
-    }))
-
-    const { fetchAndParseRss } = await loadModule()
     const { items } = await fetchAndParseRss({
       id: 1, name: 'test', url: 'https://example.com',
       rss_url: 'https://example.com/rss',
@@ -598,8 +537,6 @@ describe('fetchAndParseRss', () => {
 
     expect(items).toHaveLength(1)
     expect(items[0].title).toBe('Has URL')
-
-    vi.doUnmock('feedsmith')
   })
 })
 
@@ -609,21 +546,15 @@ describe('fetchAndParseRss', () => {
 
 describe('discoverRssUrl', () => {
   beforeEach(() => {
-    vi.resetModules()
     mockSafeFetch.mockReset()
     vi.stubGlobal('fetch', vi.fn())
   })
-
-  async function loadModule() {
-    return import('./rss.js')
-  }
 
   it('discovers RSS link from HTML page', async () => {
     mockSafeFetch
       .mockResolvedValueOnce(mockResponse(HTML_WITH_RSS_LINK, true, 200, 'text/html'))  // page fetch
       .mockResolvedValueOnce(mockResponse(RSS_XML))  // feed title fetch
 
-    const { discoverRssUrl } = await loadModule()
     const result = await discoverRssUrl('https://example.com')
 
     expect(result.rssUrl).toBe('https://example.com/feed.xml')
@@ -635,7 +566,6 @@ describe('discoverRssUrl', () => {
       .mockResolvedValueOnce(mockResponse(HTML_WITH_ATOM_LINK, true, 200, 'text/html'))
       .mockResolvedValueOnce(mockResponse(ATOM_XML))
 
-    const { discoverRssUrl } = await loadModule()
     const result = await discoverRssUrl('https://example.com')
 
     expect(result.rssUrl).toBe('https://example.com/atom.xml')
@@ -656,7 +586,6 @@ describe('discoverRssUrl', () => {
     // Feed title fetch
     mockSafeFetch.mockResolvedValueOnce(mockResponse(RSS_XML))
 
-    const { discoverRssUrl } = await loadModule()
     const result = await discoverRssUrl('https://example.com')
 
     expect(result.rssUrl).toBe('https://example.com/feed.xml')
@@ -675,7 +604,6 @@ describe('discoverRssUrl', () => {
 
     mockSafeFetch.mockResolvedValueOnce(mockResponse(RSS_XML))
 
-    const { discoverRssUrl } = await loadModule()
     const result = await discoverRssUrl('https://example.com')
 
     expect(result.rssUrl).toBe('https://example.com/feed')
@@ -690,7 +618,6 @@ describe('discoverRssUrl', () => {
     const globalFetch = vi.fn().mockResolvedValue(mockResponse('', false, 404))
     vi.stubGlobal('fetch', globalFetch)
 
-    const { discoverRssUrl } = await loadModule()
     const result = await discoverRssUrl('https://example.com')
 
     expect(result.rssUrl).toBeNull()
@@ -702,7 +629,6 @@ describe('discoverRssUrl', () => {
     const globalFetch = vi.fn().mockResolvedValue(mockResponse('', false, 404))
     vi.stubGlobal('fetch', globalFetch)
 
-    const { discoverRssUrl } = await loadModule()
     const result = await discoverRssUrl('https://example.com')
 
     expect(result.title).toBe('No Feed')
@@ -714,7 +640,6 @@ describe('discoverRssUrl', () => {
     const globalFetch = vi.fn().mockResolvedValue(mockResponse('', false, 404))
     vi.stubGlobal('fetch', globalFetch)
 
-    const { discoverRssUrl } = await loadModule()
     const result = await discoverRssUrl('https://example.com')
 
     // Falls through to path probing
@@ -729,7 +654,6 @@ describe('discoverRssUrl', () => {
     globalFetch.mockResolvedValue(mockResponse('', true, 200, 'text/html'))
     vi.stubGlobal('fetch', globalFetch)
 
-    const { discoverRssUrl } = await loadModule()
     const result = await discoverRssUrl('https://example.com')
 
     expect(result.rssUrl).toBeNull()
@@ -740,7 +664,6 @@ describe('discoverRssUrl', () => {
       .mockResolvedValueOnce(mockResponse(HTML_WITH_RSS_LINK, true, 200, 'text/html'))
       .mockResolvedValueOnce(mockResponse(RSS_XML))
 
-    const { discoverRssUrl } = await loadModule()
     const result = await discoverRssUrl('https://example.com')
 
     expect(result.title).toBe('Test Blog')  // feed title, not "My Blog" from HTML

@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { parseHtml } from './contentWorker.js'
+import { isBotBlockPage } from './content.js'
 
 // ---------------------------------------------------------------------------
 // Mocks — these mock modules used by contentWorker.ts (parseHtml)
@@ -41,20 +43,14 @@ function articleHtml(body: string, opts?: { ogImage?: string; title?: string }) 
 
 describe('parseHtml', () => {
   beforeEach(() => {
-    vi.resetModules()
     mockPreClean.mockReset()
     mockPostClean.mockReset()
     mockFindBestContentBlock.mockReset().mockReturnValue(null)
   })
 
-  async function loadModule() {
-    return import('./contentWorker.js')
-  }
-
   it('extracts article text via Readability', async () => {
     const html = articleHtml('<p>This is a test article with enough text content for Readability to extract.</p>')
 
-    const { parseHtml } = await loadModule()
     const result = parseHtml({ html, articleUrl: 'https://example.com/post-1' })
 
     expect(result.fullText).toContain('test article')
@@ -67,7 +63,6 @@ describe('parseHtml', () => {
       { ogImage: '/images/og.png' },
     )
 
-    const { parseHtml } = await loadModule()
     const result = parseHtml({ html, articleUrl: 'https://example.com/post' })
 
     expect(result.ogImage).toBe('https://example.com/images/og.png')
@@ -79,7 +74,7 @@ describe('parseHtml', () => {
       { ogImage: '../img/hero.jpg' },
     )
 
-    const { parseHtml } = await loadModule()
+
     const result = parseHtml({ html, articleUrl: 'https://example.com/blog/post' })
 
     expect(result.ogImage).toMatch(/^https:\/\/example\.com/)
@@ -88,7 +83,7 @@ describe('parseHtml', () => {
   it('returns null ogImage when not present', async () => {
     const html = articleHtml('<p>No og image in this article text content.</p>')
 
-    const { parseHtml } = await loadModule()
+
     const result = parseHtml({ html, articleUrl: 'https://example.com/post' })
 
     expect(result.ogImage).toBeNull()
@@ -98,7 +93,7 @@ describe('parseHtml', () => {
     const longText = 'A'.repeat(300)
     const html = articleHtml(`<p>${longText}</p>`)
 
-    const { parseHtml } = await loadModule()
+
     const result = parseHtml({ html, articleUrl: 'https://example.com/post' })
 
     expect(result.excerpt).not.toBeNull()
@@ -108,7 +103,7 @@ describe('parseHtml', () => {
   it('calls preClean before Readability', async () => {
     const html = articleHtml('<p>Article content for pre-clean testing purposes.</p>')
 
-    const { parseHtml } = await loadModule()
+
     parseHtml({ html, articleUrl: 'https://example.com/post' })
 
     expect(mockPreClean).toHaveBeenCalledTimes(1)
@@ -120,7 +115,7 @@ describe('parseHtml', () => {
   it('calls postClean after Readability', async () => {
     const html = articleHtml('<p>Article content for post-clean testing purposes.</p>')
 
-    const { parseHtml } = await loadModule()
+
     parseHtml({ html, articleUrl: 'https://example.com/post' })
 
     expect(mockPostClean).toHaveBeenCalledTimes(1)
@@ -130,7 +125,7 @@ describe('parseHtml', () => {
     const html = articleHtml('<p>Article content with fail open pre-clean behavior.</p>')
     mockPreClean.mockImplementation(() => { throw new Error('preClean crash') })
 
-    const { parseHtml } = await loadModule()
+
     const result = parseHtml({ html, articleUrl: 'https://example.com/post' })
 
     expect(result.fullText).toContain('fail open')
@@ -140,7 +135,7 @@ describe('parseHtml', () => {
     const html = articleHtml('<p>Article content with fail open post-clean behavior.</p>')
     mockPostClean.mockImplementation(() => { throw new Error('postClean crash') })
 
-    const { parseHtml } = await loadModule()
+
     const result = parseHtml({ html, articleUrl: 'https://example.com/post' })
 
     expect(result.fullText).toContain('fail open')
@@ -163,7 +158,7 @@ describe('parseHtml', () => {
       }
     })
 
-    const { parseHtml } = await loadModule()
+
     const result = parseHtml({ html, articleUrl: 'https://example.com/post' })
 
     expect(result.fullText).toContain('Very long content block')
@@ -178,7 +173,7 @@ describe('parseHtml', () => {
       textLen: 10000,
     })
 
-    const { parseHtml } = await loadModule()
+
     const result = parseHtml({ html, articleUrl: 'https://example.com/post' })
 
     expect(result.fullText).toContain('Good article content')
@@ -187,7 +182,7 @@ describe('parseHtml', () => {
   it('throws when Readability fails to extract content', async () => {
     const html = '<html><head></head><body></body></html>'
 
-    const { parseHtml } = await loadModule()
+
     expect(() => parseHtml({ html, articleUrl: 'https://example.com/empty' }))
       .toThrow('could not extract')
   })
@@ -201,7 +196,7 @@ describe('parseHtml', () => {
       <p>Article text content around the picture element.</p>
     `)
 
-    const { parseHtml } = await loadModule()
+
     const result = parseHtml({ html, articleUrl: 'https://example.com/post' })
 
     expect(result.fullText).toMatch(/!\[.*\]\(https:\/\/example\.com\/photo\.jpg\)/)
@@ -218,7 +213,7 @@ describe('parseHtml', () => {
       <p>Article text content with a picture element that has no src.</p>
     `)
 
-    const { parseHtml } = await loadModule()
+
     const result = parseHtml({ html, articleUrl: 'https://example.com/post' })
 
     expect(result.fullText).toContain('first.jpg')
@@ -232,7 +227,7 @@ describe('parseHtml', () => {
       <p>Article content with picture element without img child element.</p>
     `)
 
-    const { parseHtml } = await loadModule()
+
     const result = parseHtml({ html, articleUrl: 'https://example.com/post' })
 
     expect(result.fullText).toContain('from-source.jpg')
@@ -246,7 +241,7 @@ describe('parseHtml', () => {
       <p>Article content where picture has no usable image source.</p>
     `)
 
-    const { parseHtml } = await loadModule()
+
     const result = parseHtml({ html, articleUrl: 'https://example.com/post' })
 
     expect(result.fullText).not.toContain('<picture')
@@ -257,7 +252,7 @@ describe('parseHtml', () => {
 
     const config = { preCleanSelectors: ['.ad'], postCleanSelectors: ['.nav'] } as any
 
-    const { parseHtml } = await loadModule()
+
     parseHtml({ html, articleUrl: 'https://example.com/post', cleanerConfig: config })
 
     expect(mockPreClean).toHaveBeenCalledWith(expect.any(Object), config)
@@ -272,7 +267,7 @@ describe('parseHtml', () => {
       <p>Article content with relative image URL for resolution.</p>
     `)
 
-    const { parseHtml } = await loadModule()
+
     const result = parseHtml({ html, articleUrl: 'https://example.com/blog/post' })
 
     expect(result.fullText).toContain('https://example.com/images/relative.jpg')
@@ -280,10 +275,6 @@ describe('parseHtml', () => {
 })
 
 describe('isBotBlockPage', () => {
-  async function loadModule() {
-    return import('./content.js')
-  }
-
   it.each([
     'Your submission has been received',
     'Something went wrong while submitting the form',
@@ -293,29 +284,24 @@ describe('isBotBlockPage', () => {
     'Just a moment...',
     'Attention Required! | Cloudflare',
     'Access Denied - You do not have permission',
-  ])('detects bot-block pattern: %s', async (text) => {
-    const { isBotBlockPage } = await loadModule()
+  ])('detects bot-block pattern: %s', (text) => {
     expect(isBotBlockPage(text)).toBe(true)
   })
 
-  it('is case-insensitive', async () => {
-    const { isBotBlockPage } = await loadModule()
+  it('is case-insensitive', () => {
     expect(isBotBlockPage('CHECKING YOUR BROWSER')).toBe(true)
     expect(isBotBlockPage('access DENIED')).toBe(true)
   })
 
-  it('returns false for normal article text', async () => {
-    const { isBotBlockPage } = await loadModule()
+  it('returns false for normal article text', () => {
     expect(isBotBlockPage('This is a normal blog post about JavaScript frameworks.')).toBe(false)
   })
 
-  it('returns false for empty string', async () => {
-    const { isBotBlockPage } = await loadModule()
+  it('returns false for empty string', () => {
     expect(isBotBlockPage('')).toBe(false)
   })
 
-  it('detects pattern embedded in larger HTML text', async () => {
-    const { isBotBlockPage } = await loadModule()
+  it('detects pattern embedded in larger HTML text', () => {
     const html = '<div class="wrapper"><h1>Security Check</h1><p>Please verify you are a human to continue browsing.</p></div>'
     expect(isBotBlockPage(html)).toBe(true)
   })
