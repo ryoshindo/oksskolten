@@ -8,7 +8,9 @@ import {
   upsertSetting,
   getDb,
   getConversationById,
+  getConversations,
   getChatMessages,
+  insertChatMessage,
 } from './db.js'
 import { hashSync } from 'bcryptjs'
 import { afterEach } from 'vitest'
@@ -291,6 +293,39 @@ describe('POST /api/chat — settings', () => {
 
     const callArgs = mockRunChatTurn.mock.calls[0][1]
     expect(callArgs.model).toBe('gpt-4.1')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GET /api/chat/conversations — message_count
+// ---------------------------------------------------------------------------
+describe('GET /api/chat/conversations — message_count', () => {
+  it('counts only text messages, excluding tool_use and tool_result', async () => {
+    seedUser()
+    const token = getToken()
+
+    // Create a conversation with mixed message types (simulating tool use flow)
+    createConversation({ id: 'conv-tool' })
+    // 1. user text
+    insertChatMessage({ conversation_id: 'conv-tool', role: 'user', content: JSON.stringify([{ type: 'text', text: 'recommend an article' }]) })
+    // 2. assistant tool_use (not visible)
+    insertChatMessage({ conversation_id: 'conv-tool', role: 'assistant', content: JSON.stringify([{ type: 'tool_use', id: 'call_1', name: 'search_articles', input: {} }]) })
+    // 3. user tool_result (not visible)
+    insertChatMessage({ conversation_id: 'conv-tool', role: 'user', content: JSON.stringify([{ type: 'tool_result', tool_use_id: 'call_1', content: '[]' }]) })
+    // 4. assistant text
+    insertChatMessage({ conversation_id: 'conv-tool', role: 'assistant', content: JSON.stringify([{ type: 'text', text: 'Here is an article.' }]) })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/chat/conversations',
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const { conversations } = res.json()
+    const conv = conversations.find((c: any) => c.id === 'conv-tool')
+    expect(conv).toBeDefined()
+    expect(conv.message_count).toBe(2)
   })
 })
 

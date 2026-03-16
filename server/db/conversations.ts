@@ -43,7 +43,7 @@ export function getConversations(opts?: {
     first_assistant_preview: string | null
   }>(`
     SELECT c.*,
-           (SELECT COUNT(*) FROM chat_messages m WHERE m.conversation_id = c.id) AS message_count,
+           (SELECT COUNT(*) FROM chat_messages m WHERE m.conversation_id = c.id AND m.content LIKE '%"type":"text"%') AS message_count,
            a.title AS article_title,
            a.url AS article_url,
            a.og_image AS article_og_image,
