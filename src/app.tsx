@@ -69,6 +69,10 @@ function AppLayout() {
       localStorage.setItem('locale', langFromUrl)
       return
     }
+    // Only apply profile language as initial fallback — if localStorage already
+    // has a valid locale the user explicitly chose, respect it.
+    const cached = localStorage.getItem('locale')
+    if (cached === 'ja' || cached === 'en') return
     if (profile?.language === 'ja' || profile?.language === 'en') {
       setLocale(profile.language)
     }
