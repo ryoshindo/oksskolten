@@ -4,7 +4,7 @@ const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL
 const FLARESOLVERR_CONCURRENCY = Number(process.env.FLARESOLVERR_CONCURRENCY) || 0
 const flaresolverrSemaphore = FLARESOLVERR_CONCURRENCY > 0 ? new Semaphore(FLARESOLVERR_CONCURRENCY) : null
 
-export type FlareSolverrResult = { body: string; contentType: string }
+export type FlareSolverrResult = { body: string; contentType: string; url: string }
 
 interface FlareSolverrResponse {
   status: string
@@ -109,6 +109,7 @@ async function doFetch(url: string, options?: FlareSolverrOptions): Promise<Flar
       return {
         body,
         contentType: getHeaderValue(data.solution.headers, 'content-type'),
+        url: data.solution.url,
       }
     }
     return null

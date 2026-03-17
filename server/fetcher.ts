@@ -61,9 +61,17 @@ export async function fetchArticleContent(
   const existing = options?.existingArticle
 
   // Step 1: Fetch full text (skip if retry article already has content)
+  // For anchor-link articles (URL has # fragment), the page is shared across
+  // multiple items, so page fetch would return irrelevant content. Use RSS
+  // inline content (content:encoded) directly if available.
+  const isAnchorLink = url.includes('#')
+
   if (existing?.full_text) {
     fullText = existing.full_text
     ogImage = existing.og_image
+  } else if (isAnchorLink && options?.listingExcerpt) {
+    fullText = options.listingExcerpt
+    excerpt = options.listingExcerpt
   } else {
     try {
       const result = await fetchFullText(url, { requiresJsChallenge: options?.requiresJsChallenge })
@@ -76,13 +84,13 @@ export async function fetchArticleContent(
     }
   }
 
-  // Fallback: use listing-page excerpt from CSS Bridge content_selector
+  // Fallback: use RSS inline content when page fetch failed or returned bot-block page
   if (options?.listingExcerpt) {
     const shouldFallback = !fullText || isBotBlockPage(fullText)
     if (shouldFallback) {
       fullText = options.listingExcerpt
       excerpt = options.listingExcerpt
-      lastError = null // Clear fetch error — we have fallback content
+      lastError = null
     }
   }
 

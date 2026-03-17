@@ -6,5 +6,5 @@
  */
 export function articleUrlToPath(url: string): string {
   const raw = url.replace(/^https?:\/\//, '')
-  return '/' + raw.replace(/\?/g, '%3F').replace(/&/g, '%26').replace(/=/g, '%3D')
+  return '/' + raw.replace(/\?/g, '%3F').replace(/&/g, '%26').replace(/=/g, '%3D').replace(/#/g, '%23')
 }

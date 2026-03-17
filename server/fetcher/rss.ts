@@ -60,6 +60,69 @@ function throwIfRateLimited(res: Response): void {
 
 const RSS_BRIDGE_URL = process.env.RSS_BRIDGE_URL
 
+/**
+ * Decode HTML entities in a string.
+ */
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+}
+
+/**
+ * Extract usable RSS/Atom XML from a FlareSolverr response body.
+ * FlareSolverr returns Chromium-rendered content which may be:
+ *   1. Raw XML (if extractXmlFromBrowserViewer succeeded in flaresolverr.ts)
+ *   2. Chromium HTML with HTML-encoded XML entities (&lt;rss&gt; etc.)
+ *   3. Chromium HTML wrapping raw XML in <pre> tags
+ *   4. Unrelated HTML (e.g. a redirect to a non-feed page)
+ */
+function extractRssFromFlareSolverr(body: string): string {
+  // Case 1: already raw XML
+  if (/^\s*<(\?xml|rss|feed)\b/.test(body)) return body
+
+  // Case 2: HTML-encoded XML — decode and extract just the RSS/Atom root element
+  if (body.includes('&lt;rss') || body.includes('&lt;feed') || body.includes('&lt;?xml')) {
+    const decoded = decodeHtmlEntities(body)
+    return extractXmlRoot(decoded) || decoded
+  }
+
+  // Case 3: Chromium might wrap raw XML in <body><pre>...</pre>
+  const preMatch = body.match(/<pre[^>]*>([\s\S]*?)<\/pre>/)
+  if (preMatch) {
+    const inner = decodeHtmlEntities(preMatch[1])
+    if (/^\s*<(\?xml|rss|feed)\b/.test(inner)) {
+      return extractXmlRoot(inner) || inner
+    }
+  }
+
+  // Case 4: body contains raw <rss> or <feed> embedded in HTML
+  const xmlRoot = extractXmlRoot(body)
+  if (xmlRoot) return xmlRoot
+
+  return body
+}
+
+/**
+ * Extract the RSS/Atom root element from a string that may contain surrounding HTML.
+ * Returns the matched XML string or null.
+ */
+function extractXmlRoot(s: string): string | null {
+  // Try <?xml...?> preamble + RSS/Atom
+  const xmlDeclMatch = s.match(/<\?xml[\s\S]*?<\/(?:rss|feed)>/)
+  if (xmlDeclMatch) return xmlDeclMatch[0]
+
+  // Try <rss ...>...</rss>
+  const rssMatch = s.match(/<rss[\s>][\s\S]*<\/rss>/)
+  if (rssMatch) return rssMatch[0]
+
+  // Try <feed ...>...</feed> (Atom)
+  const feedMatch = s.match(/<feed[\s>][\s\S]*<\/feed>/)
+  if (feedMatch) return feedMatch[0]
+
+  return null
+}
+
 export async function fetchAndParseRss(feed: Feed, opts?: { skipCache?: boolean }): Promise<FetchRssResult> {
   const skipCache = opts?.skipCache ?? false
   const rssUrl = feed.rss_url || feed.rss_bridge_url
@@ -76,7 +139,7 @@ export async function fetchAndParseRss(feed: Feed, opts?: { skipCache?: boolean 
     // Site requires JS challenge — go straight to FlareSolverr (no conditional request support)
     const flare = await fetchViaFlareSolverr(rssUrl)
     if (!flare) throw new Error('FlareSolverr failed')
-    xml = flare.body
+    xml = extractRssFromFlareSolverr(flare.body)
   } else {
     const isRssBridgeUrl = RSS_BRIDGE_URL && rssUrl.startsWith(RSS_BRIDGE_URL)
     if (isRssBridgeUrl) {
@@ -109,7 +172,7 @@ export async function fetchAndParseRss(feed: Feed, opts?: { skipCache?: boolean 
         }
         const flare = await fetchViaFlareSolverr(rssUrl)
         if (!flare) throw new Error(`HTTP ${res.status}`)
-        xml = flare.body
+        xml = extractRssFromFlareSolverr(flare.body)
       } else {
         xml = await res.text()
       }
@@ -138,7 +201,7 @@ export async function fetchAndParseRss(feed: Feed, opts?: { skipCache?: boolean 
           // Non-200: try FlareSolverr fallback (no conditional request support)
           const flare = await fetchViaFlareSolverr(rssUrl)
           if (!flare) throw new Error(`HTTP ${res.status}`)
-          xml = flare.body
+          xml = extractRssFromFlareSolverr(flare.body)
         } else {
           xml = await res.text()
         }
@@ -147,7 +210,10 @@ export async function fetchAndParseRss(feed: Feed, opts?: { skipCache?: boolean 
           const items = cleanItems(assignCssBridgePseudoDates(await fetchCssSelectorViaFlareSolverr(rssUrl), rssUrl))
           return { items, notModified: false, etag: null, lastModified: null, contentHash: null, httpCacheSeconds: null, rssTtlSeconds: null }
         }
-        throw err
+        // Network-level failure (ECONNRESET, DNS, timeout, etc.) — try FlareSolverr
+        const flare = await fetchViaFlareSolverr(rssUrl)
+        if (!flare) throw err
+        xml = extractRssFromFlareSolverr(flare.body)
       }
     }
   }
@@ -223,12 +289,15 @@ async function parseRssXml(xml: string): Promise<RssItem[]> {
               url = alt?.href || links[0]?.href
             }
           }
+          const rawExcerpt = item.content_encoded || item['content:encoded'] || item.content || item.description || item.summary
+          const excerpt = typeof rawExcerpt === 'string' ? rawExcerpt : (rawExcerpt && typeof rawExcerpt === 'object' && 'value' in rawExcerpt ? String((rawExcerpt as Record<string, unknown>).value) : undefined)
           return {
             title: (item.title as string) || 'Untitled',
             url: (url || item.id) as string,
             published_at: normalizeDate(
               (item.published || item.updated || item.date || item.pubDate || (item.dc as Record<string, unknown>)?.date) as string | undefined,
             ),
+            ...(excerpt ? { excerpt } : {}),
           }
         })
     }
@@ -253,11 +322,15 @@ async function parseRssXml(xml: string): Promise<RssItem[]> {
   if (channel?.item) {
     const items = Array.isArray(channel.item) ? channel.item : [channel.item]
     return items
-      .map((item: Record<string, unknown>) => ({
-        title: textOf(item.title) || 'Untitled',
-        url: (item.link || item.guid || '') as string,
-        published_at: normalizeDate(item.pubDate as string | undefined),
-      }))
+      .map((item: Record<string, unknown>) => {
+        const excerpt = textOf(item['content:encoded']) || textOf(item.description)
+        return {
+          title: textOf(item.title) || 'Untitled',
+          url: (item.link || item.guid || '') as string,
+          published_at: normalizeDate(item.pubDate as string | undefined),
+          ...(excerpt ? { excerpt } : {}),
+        }
+      })
       .filter((item: RssItem) => item.url)
   }
 
@@ -273,12 +346,14 @@ async function parseRssXml(xml: string): Promise<RssItem[]> {
           : (entry.link as Record<string, string>)?.['@_href'] || (entry.link as string)
         const id = entry.id as string | undefined
         const effectiveUrl = link || (id && /^https?:\/\//i.test(id) ? id : '') || ''
+        const excerpt = textOf(entry.content) || textOf(entry.summary)
         return {
           title: textOf(entry.title) || 'Untitled',
           url: effectiveUrl,
           published_at: normalizeDate(
             (entry.published || entry.updated) as string | undefined,
           ),
+          ...(excerpt ? { excerpt } : {}),
         }
       })
       .filter((item: RssItem) => item.url)
@@ -380,11 +455,21 @@ export async function discoverRssUrl(blogUrl: string, callbacks?: DiscoverCallba
 
   // Step 2: Probe candidate paths (if Step 1 didn't find RSS)
   if (!rssUrl) {
-    const candidates = ['/feed', '/feed.xml', '/rss', '/rss.xml', '/atom.xml', '/index.xml']
+    const rootCandidates = ['/feed', '/feed.xml', '/rss', '/rss.xml', '/atom.xml', '/index.xml']
     const base = new URL(blogUrl)
 
-    for (const candidatePath of candidates) {
-      const candidateUrl = new URL(candidatePath, base).toString()
+    // Build probe URLs: root-relative paths + page-relative paths (treating input URL as directory)
+    const pageBase = base.pathname.endsWith('/') ? base.href : base.href + '/'
+    const seen = new Set<string>()
+    const probeUrls: string[] = []
+    for (const p of rootCandidates) {
+      const fromRoot = new URL(p, base).toString()
+      const fromPage = new URL(p.replace(/^\//, ''), pageBase).toString()
+      if (!seen.has(fromRoot)) { seen.add(fromRoot); probeUrls.push(fromRoot) }
+      if (!seen.has(fromPage)) { seen.add(fromPage); probeUrls.push(fromPage) }
+    }
+
+    for (const candidateUrl of probeUrls) {
       try {
         let probeRes = await fetch(candidateUrl, {
           method: 'HEAD',
@@ -407,6 +492,68 @@ export async function discoverRssUrl(blogUrl: string, callbacks?: DiscoverCallba
         }
       } catch {
         // Probe failed, try next
+      }
+    }
+
+    // Fallback: if all regular probes failed, try top candidates via FlareSolverr.
+    // FlareSolverr returns Chromium-rendered content. We use multiple strategies:
+    // 1. Redirect detection: if Chromium was redirected to a different host, skip
+    // 2. Content-type / raw XML checks
+    // 3. HTML-decoded body parsing (Chromium may HTML-encode XML tags)
+    if (!rssUrl) {
+      const topCandidates = ['rss.xml', 'feed.xml', 'atom.xml']
+      for (const name of topCandidates) {
+        const candidateUrl = new URL(name, pageBase).toString()
+        try {
+          const flare = await fetchViaFlareSolverr(candidateUrl)
+          if (!flare) continue
+
+          // Skip if Chromium was redirected to a different host (e.g. 404 → homepage)
+          try {
+            const reqHost = new URL(candidateUrl).host
+            const resHost = new URL(flare.url).host
+            if (reqHost !== resHost) continue
+          } catch { /* ignore URL parse errors */ }
+
+          // Check content-type from original response headers
+          const ct = flare.contentType
+          if (ct.includes('xml') || ct.includes('rss') || ct.includes('atom')) {
+            rssUrl = candidateUrl
+            break
+          }
+          // If extractXmlFromBrowserViewer succeeded, body is raw XML
+          if (/^\s*<(\?xml|rss|feed)\b/.test(flare.body)) {
+            rssUrl = candidateUrl
+            break
+          }
+          // Search anywhere in body for RSS/Atom elements (raw or HTML-encoded)
+          if (/<rss[\s>]/.test(flare.body) || /&lt;rss[\s>]/.test(flare.body)) {
+            rssUrl = candidateUrl
+            break
+          }
+          if (/<feed[\s>]/.test(flare.body) || /&lt;feed[\s>]/.test(flare.body)) {
+            rssUrl = candidateUrl
+            break
+          }
+          // Try parsing body as RSS (works if extractXmlFromBrowserViewer succeeded)
+          const items = await parseRssXml(flare.body)
+          if (items.length > 0) {
+            rssUrl = candidateUrl
+            break
+          }
+          // Try HTML-decoding body and parsing (Chromium wraps XML in HTML with encoded entities)
+          if (flare.body.includes('&lt;rss') || flare.body.includes('&lt;feed')) {
+            const decoded = flare.body
+              .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+            const decodedItems = await parseRssXml(decoded)
+            if (decodedItems.length > 0) {
+              rssUrl = candidateUrl
+              break
+            }
+          }
+        } catch {
+          // FlareSolverr probe failed, try next
+        }
       }
     }
   }

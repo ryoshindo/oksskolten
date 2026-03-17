@@ -29,10 +29,18 @@ export async function fetchHtml(url: string, opts?: {
     return { html: flare.body, contentType: flare.contentType, usedFlareSolverr: true }
   }
 
-  const res = await safeFetch(url, {
-    headers: { 'User-Agent': USER_AGENT },
-    signal: AbortSignal.timeout(timeout),
-  })
+  let res: Response
+  try {
+    res = await safeFetch(url, {
+      headers: { 'User-Agent': USER_AGENT },
+      signal: AbortSignal.timeout(timeout),
+    })
+  } catch {
+    // Network-level failure (ECONNRESET, DNS, timeout, etc.) — try FlareSolverr
+    const flare = await fetchViaFlareSolverr(url)
+    if (!flare) throw new Error('Fetch failed and FlareSolverr unavailable')
+    return { html: flare.body, contentType: flare.contentType, usedFlareSolverr: true }
+  }
 
   if (!res.ok) {
     const flare = await fetchViaFlareSolverr(url)

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { parseHtml } from './contentWorker.js'
-import { isBotBlockPage } from './content.js'
+import { extractAnchoredContentHtml, isBotBlockPage, stripHeavyTags } from './content.js'
 
 // ---------------------------------------------------------------------------
 // Mocks — these mock modules used by contentWorker.ts (parseHtml)
@@ -271,6 +271,121 @@ describe('parseHtml', () => {
     const result = parseHtml({ html, articleUrl: 'https://example.com/blog/post' })
 
     expect(result.fullText).toContain('https://example.com/images/relative.jpg')
+  })
+})
+
+describe('extractAnchoredContentHtml', () => {
+  it('extracts only the targeted anchored section', () => {
+    const html = `<!DOCTYPE html>
+<html>
+<head><title>Changelog</title></head>
+<body>
+  <main>
+    <h2 id="2-1-75">2.1.75</h2>
+    <p>Previous release notes that should be excluded.</p>
+    <h2 id="2-1-74">2.1.74</h2>
+    <p>Target release notes with the content we want.</p>
+    <ul><li>Relevant bullet</li></ul>
+    <h2 id="2-1-73">2.1.73</h2>
+    <p>Next release notes that should also be excluded.</p>
+  </main>
+</body>
+</html>`
+
+    const extracted = extractAnchoredContentHtml(html, 'https://example.com/changelog#2-1-74')
+
+    expect(extracted).toContain('Target release notes')
+    expect(extracted).toContain('Relevant bullet')
+    expect(extracted).not.toContain('Previous release notes')
+    expect(extracted).not.toContain('Next release notes')
+  })
+
+  it('returns original html when anchor target is missing', () => {
+    const html = articleHtml('<p>Original content.</p>')
+
+    expect(extractAnchoredContentHtml(html, 'https://example.com/post#missing')).toBe(html)
+  })
+
+  it('uses the nearest heading when the id is on a nested element', () => {
+    const html = `<!DOCTYPE html>
+<html>
+<body>
+  <main>
+    <h2>2.1.75 <a id="2-1-75"></a></h2>
+    <p>Previous section.</p>
+    <h2>2.1.74 <a id="2-1-74"></a></h2>
+    <p>Target section.</p>
+    <h2>2.1.73 <a id="2-1-73"></a></h2>
+    <p>Next section.</p>
+  </main>
+</body>
+</html>`
+
+    const extracted = extractAnchoredContentHtml(html, 'https://example.com/changelog#2-1-74')
+
+    expect(extracted).toContain('Target section')
+    expect(extracted).not.toContain('Previous section')
+    expect(extracted).not.toContain('Next section')
+  })
+
+  it('keeps nested subheadings inside the targeted section', () => {
+    const html = `<!DOCTYPE html>
+<html>
+<body>
+  <main>
+    <h2 id="2-1-74">2.1.74</h2>
+    <p>Intro for target section.</p>
+    <h3 id="details">Details</h3>
+    <p>Nested details that should stay.</p>
+    <h2 id="2-1-73">2.1.73</h2>
+    <p>Next section.</p>
+  </main>
+</body>
+</html>`
+
+    const extracted = extractAnchoredContentHtml(html, 'https://example.com/changelog#2-1-74')
+
+    expect(extracted).toContain('Intro for target section')
+    expect(extracted).toContain('Nested details that should stay')
+    expect(extracted).not.toContain('Next section')
+  })
+
+  it('handles role heading sections as boundaries', () => {
+    const html = `<!DOCTYPE html>
+<html>
+<body>
+  <main>
+    <div role="heading" aria-level="2" id="2-1-74">2.1.74</div>
+    <p>Target section.</p>
+    <div role="heading" aria-level="2" id="2-1-73">2.1.73</div>
+    <p>Next section.</p>
+  </main>
+</body>
+</html>`
+
+    const extracted = extractAnchoredContentHtml(html, 'https://example.com/changelog#2-1-74')
+
+    expect(extracted).toContain('Target section')
+    expect(extracted).not.toContain('Next section')
+  })
+})
+
+describe('stripHeavyTags', () => {
+  it('removes shell elements before readability', () => {
+    const html = `
+<header><p>Header</p></header>
+<nav><p>Nav</p></nav>
+<article><p>Body</p></article>
+<aside><p>Aside</p></aside>
+<footer><p>Footer</p></footer>`
+
+    const stripped = stripHeavyTags(html)
+
+    expect(stripped).toContain('<article><p>Body</p></article>')
+    expect(stripped).not.toContain('Header')
+    expect(stripped).not.toContain('Nav')
+    expect(stripped).not.toContain('Aside')
+    expect(stripped).not.toContain('Footer')
   })
 })
 

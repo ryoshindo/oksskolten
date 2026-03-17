@@ -168,13 +168,13 @@ const dict = {
   'modal.errorAlreadyExists': { ja: 'このフィードは既に登録されています', en: 'This feed already exists' },
   'modal.genericError': { ja: 'エラーが発生しました', en: 'An error occurred' },
   'modal.step.rssDiscovery': { ja: 'RSS 検出', en: 'RSS discovery' },
-  'modal.step.flaresolverr': { ja: 'Bot認証を突破中…', en: 'Solving bot challenge…' },
+  'modal.step.flaresolverr': { ja: 'JSレンダリング', en: 'JS rendering' },
   'modal.step.rssBridge': { ja: 'RSS Bridge', en: 'RSS Bridge' },
   'modal.step.cssSelector': { ja: 'CSS Selector（LLM）', en: 'CSS Selector (LLM)' },
   'modal.step.done': { ja: 'フィード作成完了', en: 'Feed created' },
   'modal.step.completed': { ja: '完了', en: 'Completed' },
   'modal.step.found': { ja: '検出', en: 'Found' },
-  'modal.step.notFound': { ja: '検出できず', en: 'Not found' },
+  'modal.step.notFound': { ja: 'この段階では未検出', en: 'Not detected at this step' },
   'modal.step.skipped': { ja: 'スキップ', en: 'Skipped' },
 
   // Settings

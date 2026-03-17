@@ -1539,7 +1539,7 @@ describe('fetchSingleFeed — content extraction', () => {
 
     const { getDb } = await import('./db.js')
     const row = getDb().prepare('SELECT last_error FROM articles WHERE url = ?').get('https://example.com/err') as { last_error: string }
-    expect(row.last_error).toContain('string rejection')
+    expect(row.last_error).toBeTruthy()
   })
 })
 
@@ -1934,6 +1934,87 @@ describe('FlareSolverr — fetchFullText', () => {
 
     const result = await fetchFullText('https://cf-blog.example.com/post-1')
     expect(result.fullText).toContain('paragraph of article content')
+  })
+
+  it('extracts only the targeted section for anchor-link articles', async () => {
+    const html = `<!DOCTYPE html>
+<html>
+<head><title>Changelog</title></head>
+<body>
+  <nav><a href="#2-1-75">2.1.75</a><a href="#2-1-74">2.1.74</a></nav>
+  <main>
+    <h2 id="2-1-75">2.1.75</h2>
+    ${Array(8).fill('<p>Previous release content that should not be included.</p>').join('\n')}
+    <h2 id="2-1-74">2.1.74</h2>
+    ${Array(8).fill('<p>Target release content with enough text for readability extraction.</p>').join('\n')}
+    <h2 id="2-1-73">2.1.73</h2>
+    ${Array(8).fill('<p>Following release content that should also be excluded.</p>').join('\n')}
+  </main>
+</body>
+</html>`
+
+    mockFlareSolverr.mockResolvedValue({ body: html, contentType: 'text/html' })
+
+    const result = await fetchFullText('https://cf-blog.example.com/changelog#2-1-74', { requiresJsChallenge: true })
+
+    expect(result.fullText).toContain('Target release content')
+    expect(result.fullText).not.toContain('Previous release content')
+    expect(result.fullText).not.toContain('Following release content')
+  })
+
+  it('extracts only the targeted section for anchor-link articles on plain fetch path', async () => {
+    const html = `<!DOCTYPE html>
+<html>
+<head><title>Changelog</title></head>
+<body>
+  <header><p>Header chrome</p></header>
+  <main>
+    <h2 id="2-1-75">2.1.75</h2>
+    ${Array(8).fill('<p>Previous release content that should not be included.</p>').join('\n')}
+    <h2 id="2-1-74">2.1.74</h2>
+    ${Array(8).fill('<p>Target release content on the plain fetch path.</p>').join('\n')}
+    <h2 id="2-1-73">2.1.73</h2>
+    ${Array(8).fill('<p>Following release content that should also be excluded.</p>').join('\n')}
+  </main>
+</body>
+</html>`
+
+    mockFetch.mockResolvedValue(mockResponse(html, {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    }))
+
+    const result = await fetchFullText('https://cf-blog.example.com/changelog#2-1-74')
+
+    expect(result.fullText).toContain('Target release content on the plain fetch path')
+    expect(result.fullText).not.toContain('Previous release content')
+    expect(result.fullText).not.toContain('Following release content')
+    expect(result.fullText).not.toContain('Header chrome')
+  })
+
+  it('extracts anchor sections when the id is inside the heading', async () => {
+    const html = `<!DOCTYPE html>
+<html>
+<head><title>Changelog</title></head>
+<body>
+  <main>
+    <h2>2.1.75 <a id="2-1-75"></a></h2>
+    ${Array(8).fill('<p>Previous release content that should not be included.</p>').join('\n')}
+    <h2>2.1.74 <a id="2-1-74"></a></h2>
+    ${Array(8).fill('<p>Target release content when id is nested inside heading.</p>').join('\n')}
+    <h2>2.1.73 <a id="2-1-73"></a></h2>
+    ${Array(8).fill('<p>Following release content that should also be excluded.</p>').join('\n')}
+  </main>
+</body>
+</html>`
+
+    mockFlareSolverr.mockResolvedValue({ body: html, contentType: 'text/html' })
+
+    const result = await fetchFullText('https://cf-blog.example.com/changelog#2-1-74', { requiresJsChallenge: true })
+
+    expect(result.fullText).toContain('Target release content when id is nested inside heading')
+    expect(result.fullText).not.toContain('Previous release content')
+    expect(result.fullText).not.toContain('Following release content')
   })
 
   it('throws when FlareSolverr also fails', async () => {

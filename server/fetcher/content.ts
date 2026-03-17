@@ -1,4 +1,5 @@
 import Piscina from 'piscina'
+import { JSDOM } from 'jsdom'
 import { fetchHtml } from './http.js'
 import { fetchViaFlareSolverr } from './flaresolverr.js'
 import type { CleanerConfig } from '../lib/cleaner/selectors.js'
@@ -13,21 +14,102 @@ const pool = new Piscina({
   maxThreads: Number(process.env.PARSE_MAX_THREADS) || 2,
 })
 
-/** Per-task timeout for worker pool (30 s should be plenty for even large HTML). */
-const WORKER_TIMEOUT_MS = 30_000
+/** Per-task timeout for worker pool. */
+const WORKER_TIMEOUT_MS = 45_000
 
 /**
  * Strip heavy non-content tags before passing HTML to the worker thread.
  * This runs on the main thread with simple regex (no DOM parsing), so it's fast.
- * Removes <script>, <style>, <svg>, and <noscript> blocks that are irrelevant
- * to Readability extraction but can make jsdom parsing extremely slow on large pages.
+ * Removes clearly non-content shells before Readability to reduce parse time.
  */
-function stripHeavyTags(html: string): string {
+export function stripHeavyTags(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/<style[\s\S]*?<\/style>/gi, '')
     .replace(/<svg[\s\S]*?<\/svg>/gi, '')
     .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+    .replace(/<header[\s\S]*?<\/header>/gi, '')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+    .replace(/<aside[\s\S]*?<\/aside>/gi, '')
+    .replace(/<dialog[\s\S]*?<\/dialog>/gi, '')
+    .replace(/<form[\s\S]*?<\/form>/gi, '')
+    .replace(/<template[\s\S]*?<\/template>/gi, '')
+    .replace(/<canvas[\s\S]*?<\/canvas>/gi, '')
+}
+
+function isHeading(el: Element): el is HTMLElement {
+  return /^H[1-6]$/i.test(el.tagName)
+}
+
+function headingLevel(el: Element | null): number {
+  if (!el) return 6
+  if (isHeading(el)) return Number(el.tagName[1])
+  if (el.getAttribute('role') === 'heading') {
+    const ariaLevel = Number(el.getAttribute('aria-level') || '6')
+    return Number.isFinite(ariaLevel) && ariaLevel > 0 ? ariaLevel : 6
+  }
+  return 6
+}
+
+function isBoundaryHeading(el: Element, targetLevel: number): boolean {
+  return headingLevel(el) <= targetLevel
+}
+
+/**
+ * For anchor-link documents like changelogs, extract only the targeted section.
+ * This avoids sending the entire page history to jsdom + Readability.
+ */
+export function extractAnchoredContentHtml(html: string, articleUrl: string): string {
+  const url = new URL(articleUrl)
+  const hash = url.hash.replace(/^#/, '')
+  if (!hash) return html
+
+  const dom = new JSDOM(html, { url: articleUrl })
+  const doc = dom.window.document
+  const target = doc.getElementById(hash)
+  if (!target) return html
+
+  const start = isHeading(target) ? target : (target as Element).closest('h1, h2, h3, h4, h5, h6, [role="heading"]') || target
+  const targetLevel = headingLevel(start)
+
+  let endBoundary: Element | null = null
+  let current: Element | null = start
+  while ((current = current!.nextElementSibling)) {
+    if (isBoundaryHeading(current, targetLevel)) {
+      endBoundary = current
+      break
+    }
+  }
+
+  const range = doc.createRange()
+  range.setStartBefore(start)
+  if (endBoundary) range.setEndBefore(endBoundary)
+  else range.setEndAfter(doc.body.lastElementChild || doc.body)
+
+  const fragment = doc.createElement('article')
+  fragment.append(range.cloneContents())
+  const fragmentHtml = fragment.innerHTML.trim()
+  if (!fragmentHtml) return html
+
+  const ogTags = [
+    doc.querySelector('meta[property="og:image"]')?.outerHTML,
+    doc.querySelector('meta[property="og:title"]')?.outerHTML,
+  ].filter(Boolean).join('\n')
+  const title = doc.querySelector('title')?.textContent || ''
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<title>${title}</title>
+${ogTags}
+</head>
+<body>
+<article>
+${fragmentHtml}
+</article>
+</body>
+</html>`
 }
 
 export interface FetchFullTextOptions {
@@ -41,9 +123,11 @@ export async function fetchFullText(articleUrl: string, options?: FetchFullTextO
 
   // Step 1: Fetch HTML (async I/O, non-blocking — stays on main thread)
   const { html } = await fetchHtml(articleUrl, { useFlareSolverr: requiresJsChallenge })
+  const extractedHtml = extractAnchoredContentHtml(html, articleUrl)
+  const cleanedHtml = stripHeavyTags(extractedHtml)
 
   // Step 2: Parse HTML in worker thread (CPU-intensive, off main thread)
-  const input: ParseHtmlInput = { html: stripHeavyTags(html), articleUrl, cleanerConfig }
+  const input: ParseHtmlInput = { html: cleanedHtml, articleUrl, cleanerConfig }
   const result: ParseHtmlResult = await pool.run(input, { signal: AbortSignal.timeout(WORKER_TIMEOUT_MS) })
 
   // Step 3: FlareSolverr fallback if extracted text is too short or looks like garbage
@@ -54,7 +138,8 @@ export async function fetchFullText(articleUrl: string, options?: FetchFullTextO
       waitForSelector: 'article, main, [role="main"], .post-content, .entry-content',
     })
     if (flare) {
-      const flareInput: ParseHtmlInput = { html: stripHeavyTags(flare.body), articleUrl, cleanerConfig }
+      const flareHtml = stripHeavyTags(extractAnchoredContentHtml(flare.body, articleUrl))
+      const flareInput: ParseHtmlInput = { html: flareHtml, articleUrl, cleanerConfig }
       const flareResult: ParseHtmlResult = await pool.run(flareInput, { signal: AbortSignal.timeout(WORKER_TIMEOUT_MS) })
       const flareLen = flareResult.fullText.replace(/\s+/g, ' ').trim().length
       if (flareLen > extractedLen) {
