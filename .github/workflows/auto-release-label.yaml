@@ -1,0 +1,23 @@
+name: Auto Release Label
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  add-release-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add release label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          case "$LABEL" in
+            kind/breaking-change) gh pr edit ${{ github.event.number }} --add-label release/major ;;
+            kind/feature|kind/deprecation) gh pr edit ${{ github.event.number }} --add-label release/minor ;;
+          esac
