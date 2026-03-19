@@ -7,14 +7,14 @@ _guide_heading_text(h) := concat("", [c.value | some c in h.children; c.type == 
 
 _guide_filename := object.get(input, ["metadata", "filename"], "")
 
-# Rule G1: Guide filename must be kebab-case and start with a gerund (verbing-object)
+# Rule 1: Guide filename must be kebab-case and start with a gerund (verbing-object)
 deny contains msg if {
 	_guide_filename != ""
 	not regex.match(`^[a-z]+ing-[a-z0-9][a-z0-9-]*\.md$`, _guide_filename)
 	msg := sprintf("Guide filename must be kebab-case starting with a gerund (e.g., creating-themes.md), got: '%s'", [_guide_filename])
 }
 
-# Rule G2: Guide H1 first word must match filename first segment
+# Rule 2: Guide H1 first word must match filename first segment
 deny contains msg if {
 	_guide_filename != ""
 	some h in input.children

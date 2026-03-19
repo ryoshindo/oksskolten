@@ -4,14 +4,14 @@ import rego.v1
 
 filename := object.get(input, ["metadata", "filename"], "")
 
-# Rule 7: Filename must match {NN}_{snake_case}.md
+# Rule 9: Filename must match {NN}_{snake_case}.md
 deny contains msg if {
 	filename != ""
 	not regex.match(`^\d{2}_[a-z][a-z0-9_]*\.md$`, filename)
 	msg := sprintf("Filename must match {NN}_{snake_case}.md, got: '%s'", [filename])
 }
 
-# Rule 8: Number prefix category must match content type
+# Rule 10: Number prefix category must match content type
 # 0x = overview/architecture, 1x-5x = core specs, 8x = feature, 9x = perf
 valid_prefix_categories := {
 	"8": "_feature_",

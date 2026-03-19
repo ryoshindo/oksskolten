@@ -13,7 +13,7 @@ _adr_headings := [h | some h in input.children; h.type == "heading"]
 # H2 names in order
 _adr_h2_names := [_adr_heading_text(h) | some h in input.children; h.type == "heading"; h.depth == 2]
 
-# Rule A2: H1 must start with "ADR-NNN:"
+# Rule 3: H1 must start with "ADR-NNN:"
 deny contains msg if {
 	_adr_filename != ""
 	some h in _adr_headings
@@ -23,7 +23,7 @@ deny contains msg if {
 	msg := sprintf("ADR H1 must match 'ADR-NNN: {Title}', got: '%s'", [text])
 }
 
-# Rule A3: Exactly one H1
+# Rule 4: Exactly one H1
 deny contains msg if {
 	_adr_filename != ""
 	h1s := [h | some h in _adr_headings; h.depth == 1]
@@ -31,7 +31,7 @@ deny contains msg if {
 	msg := sprintf("ADR must have exactly one H1, found %d", [count(h1s)])
 }
 
-# Rule A5: Required H2 sections — Status, Context, Decision, Consequences
+# Rule 5: Required H2 sections — Status, Context, Decision, Consequences
 _adr_required_h2s := ["Status", "Context", "Decision", "Consequences"]
 
 deny contains msg if {
@@ -41,7 +41,7 @@ deny contains msg if {
 	msg := sprintf("ADR must have '## %s' section", [required])
 }
 
-# Rule A6: Status must be one of the allowed values
+# Rule 6: Status must be one of the allowed values
 # Check the first paragraph after the ## Status heading
 _adr_valid_statuses := {"Accepted", "Deprecated", "Superseded"}
 

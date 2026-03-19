@@ -11,7 +11,7 @@ h(depth, text) := {"type": "heading", "depth": depth, "children": [{"type": "tex
 guide_doc(filename, children) := {"type": "root", "children": children, "metadata": {"filename": filename}}
 
 # ---------------------------------------------------------------------------
-# Rule G1: Guide filename kebab-case with gerund
+# Rule 1: Guide filename kebab-case with gerund
 # ---------------------------------------------------------------------------
 
 test_guide_filename_valid if {
@@ -35,7 +35,7 @@ test_guide_filename_uppercase_rejected if {
 }
 
 # ---------------------------------------------------------------------------
-# Rule G2: Guide H1 first word matches filename first segment
+# Rule 2: Guide H1 first word matches filename first segment
 # ---------------------------------------------------------------------------
 
 test_guide_h1_matches_filename if {

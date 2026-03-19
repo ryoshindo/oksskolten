@@ -25,7 +25,7 @@ _inject_bto(filename, children) := result if {
 }
 
 # ---------------------------------------------------------------------------
-# Rule 7: Filename format
+# Rule 9: Filename format
 # ---------------------------------------------------------------------------
 
 test_filename_valid_en if {
@@ -53,7 +53,7 @@ test_filename_ja_rejected if {
 }
 
 # ---------------------------------------------------------------------------
-# Rule 8: Number prefix category
+# Rule 10: Number prefix category
 # ---------------------------------------------------------------------------
 
 test_8x_feature_valid if {

@@ -22,7 +22,7 @@ valid_adr(filename) := adr_doc(filename, [
 ])
 
 # ---------------------------------------------------------------------------
-# Rule A1: Filename format
+# Rule 1: Filename format
 # ---------------------------------------------------------------------------
 
 test_adr_filename_valid if {
@@ -42,7 +42,7 @@ test_adr_filename_snake_case if {
 }
 
 # ---------------------------------------------------------------------------
-# Rule A4: H1 number matches filename
+# Rule 2: H1 number matches filename
 # ---------------------------------------------------------------------------
 
 test_adr_number_match if {

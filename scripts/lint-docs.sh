@@ -1,97 +1,79 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SPEC_DIR="docs/spec"
-GUIDE_DIR="docs/guides"
-ADR_DIR="docs/adr"
 REMARK="./node_modules/.bin/remark"
 PROJECT_ROOT="$(pwd)"
 
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
-mkdir -p "$tmpdir/spec" "$tmpdir/guides" "$tmpdir/adr"
-
 # Collect all spec filenames as a JSON array for cross-file checks
-all_filenames=$(printf '%s\n' "$SPEC_DIR"/*.md | xargs -I{} basename {} | jq -MRs 'split("\n") | map(select(. != ""))')
+all_spec_filenames=$(printf '%s\n' docs/spec/*.md | xargs -I{} basename {} | jq -MRs 'split("\n") | map(select(. != ""))')
 
-# Phase 1a: Convert spec files to JSON ASTs in parallel
-for file in "$SPEC_DIR"/*.md; do
-  [ -f "$file" ] || continue
-  name=$(basename "$file")
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
-  is_feature=false
-  is_perf=false
-  if [[ "$name" == *_feature_* ]]; then
-    is_feature=true
-  fi
-  if [[ "$name" == *_perf_* ]]; then
-    is_perf=true
-  fi
+# Convert markdown files to remark JSON ASTs in parallel.
+# Usage: convert_to_ast <docs_dir> <scope> <metadata_fn>
+#   docs_dir   — source directory (e.g., docs/spec)
+#   scope      — subdirectory name under tmpdir (e.g., spec)
+#   metadata_fn — function that receives a filename and prints a JSON metadata object
+convert_to_ast() {
+  local docs_dir="$1" scope="$2" metadata_fn="$3"
+  [ -d "$docs_dir" ] || return 0
+  mkdir -p "$tmpdir/$scope"
+  for file in "$docs_dir"/*.md; do
+    [ -f "$file" ] || continue
+    local name
+    name=$(basename "$file")
+    local metadata
+    metadata=$("$metadata_fn" "$name")
+    (
+      "$REMARK" --tree-out < "$file" 2>/dev/null \
+        | jq -M -s ".[0] * $metadata" \
+        > "$tmpdir/$scope/$name"
+    ) &
+  done
+}
 
-  metadata=$(jq -Mn \
+# Run conftest for a scope if AST files exist.
+# Usage: run_conftest <scope>
+run_conftest() {
+  local scope="$1"
+  ls "$tmpdir/$scope"/*.md &>/dev/null || return 0
+  echo "conftest test --policy policy/$scope"
+  (cd "$tmpdir/$scope" && conftest test --parser json --policy "$PROJECT_ROOT/policy/$scope" *.md)
+}
+
+# ── Metadata builders ────────────────────────────────────────────────────────
+
+spec_metadata() {
+  local name="$1"
+  local is_feature=false is_perf=false
+  [[ "$name" == *_feature_* ]] && is_feature=true
+  [[ "$name" == *_perf_* ]] && is_perf=true
+  jq -Mn \
     --arg filename "$name" \
     --argjson is_feature "$is_feature" \
     --argjson is_perf "$is_perf" \
-    --argjson all_filenames "$all_filenames" \
-    '{metadata: {filename: $filename, is_feature: $is_feature, is_perf: $is_perf, all_filenames: $all_filenames}}')
+    --argjson all_filenames "$all_spec_filenames" \
+    '{metadata: {filename: $filename, is_feature: $is_feature, is_perf: $is_perf, all_filenames: $all_filenames}}'
+}
 
-  (
-    "$REMARK" --tree-out < "$file" 2>/dev/null \
-      | jq -M -s ".[0] * $metadata" \
-      > "$tmpdir/spec/$name"
-  ) &
-done
+simple_metadata() {
+  local name="$1"
+  jq -Mn --arg filename "$name" '{metadata: {filename: $filename}}'
+}
 
-# Phase 1b: Convert guide files to JSON ASTs in parallel
-if [ -d "$GUIDE_DIR" ]; then
-  for file in "$GUIDE_DIR"/*.md; do
-    [ -f "$file" ] || continue
-    name=$(basename "$file")
+# ── Phase 1: Convert to AST ─────────────────────────────────────────────────
 
-    metadata=$(jq -Mn \
-      --arg filename "$name" \
-      '{metadata: {filename: $filename}}')
-
-    (
-      "$REMARK" --tree-out < "$file" 2>/dev/null \
-        | jq -M -s ".[0] * $metadata" \
-        > "$tmpdir/guides/$name"
-    ) &
-  done
-fi
-
-# Phase 1c: Convert ADR files to JSON ASTs in parallel
-if [ -d "$ADR_DIR" ]; then
-  for file in "$ADR_DIR"/*.md; do
-    [ -f "$file" ] || continue
-    name=$(basename "$file")
-
-    metadata=$(jq -Mn \
-      --arg filename "$name" \
-      '{metadata: {filename: $filename}}')
-
-    (
-      "$REMARK" --tree-out < "$file" 2>/dev/null \
-        | jq -M -s ".[0] * $metadata" \
-        > "$tmpdir/adr/$name"
-    ) &
-  done
-fi
+convert_to_ast "docs/spec"   "spec"   spec_metadata
+convert_to_ast "docs/guides" "guides" simple_metadata
+convert_to_ast "docs/adr"    "adr"    simple_metadata
 
 wait
 
-# Phase 2: Run conftest separately for each policy scope
-# cd into tmpdir subdirs so conftest shows basename-only paths
-echo "conftest test --policy policy/spec"
-(cd "$tmpdir/spec" && conftest test --parser json --policy "$PROJECT_ROOT/policy/spec" *.md)
+# ── Phase 2: Run conftest ───────────────────────────────────────────────────
 
-if ls "$tmpdir/guides"/*.md &>/dev/null; then
-  echo "conftest test --policy policy/guides"
-  (cd "$tmpdir/guides" && conftest test --parser json --policy "$PROJECT_ROOT/policy/guides" *.md)
-fi
-
-if ls "$tmpdir/adr"/*.md &>/dev/null; then
-  echo "conftest test --policy policy/adr"
-  (cd "$tmpdir/adr" && conftest test --parser json --policy "$PROJECT_ROOT/policy/adr" *.md)
-fi
+run_conftest "spec"
+run_conftest "guides"
+run_conftest "adr"
