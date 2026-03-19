@@ -131,15 +131,14 @@ export const ArticleList = forwardRef<ArticleListHandle, object>(function Articl
   }, [articles])
 
   const isOverlayMode = articleOpenMode === 'overlay'
-  // Track whether overlay was recently closed to prevent Escape from clearing focus
-  const overlayJustClosed = useRef(false)
+  // Short debounce after overlay close to prevent Escape from immediately clearing focus
+  const escapeDebounceRef = useRef(false)
 
   useKeyboardNavigation({
     items: articleIds,
     focusedItemId,
     onFocusChange: (id) => {
       setFocusedItemId(id)
-      overlayJustClosed.current = false
       const el = document.querySelector(`[data-article-id="${id}"]`)
       el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
       // Overlay mode: open article immediately on j/k
@@ -154,15 +153,8 @@ export const ArticleList = forwardRef<ArticleListHandle, object>(function Articl
       if (article) void navigate(`/${encodeURIComponent(article.url)}`)
     },
     onEscape: () => {
-      if (overlayUrl) {
-        setOverlayUrl(null)
-        overlayJustClosed.current = true
-      } else if (overlayJustClosed.current) {
-        // First Escape after closing overlay: do nothing, keep focus
-        overlayJustClosed.current = false
-      } else {
-        setFocusedItemId(null)
-      }
+      if (escapeDebounceRef.current) return
+      setFocusedItemId(null)
     },
     onBookmarkToggle: (id) => {
       const article = articleMap.get(id)
@@ -533,7 +525,11 @@ export const ArticleList = forwardRef<ArticleListHandle, object>(function Articl
         </div>
       )}
 
-      <ArticleOverlay articleUrl={overlayUrl} onClose={() => { setOverlayUrl(null); overlayJustClosed.current = true }} />
+      <ArticleOverlay articleUrl={overlayUrl} onClose={() => {
+        setOverlayUrl(null)
+        escapeDebounceRef.current = true
+        setTimeout(() => { escapeDebounceRef.current = false }, 100)
+      }} />
     </main>
   )
 })
