@@ -707,6 +707,8 @@ export function purgeExpiredArticles(readDays: number, unreadDays: number): { pu
           summary = NULL,
           og_image = NULL,
           images_archived_at = NULL,
+          last_error = NULL,
+          retry_count = 0,
           purged_at = datetime('now')
       WHERE id IN (${placeholders})
     `).run(...batch)
