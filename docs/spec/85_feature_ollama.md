@@ -36,14 +36,8 @@ Ollama may be exposed through a reverse proxy (e.g. Cloudflare Tunnel) that requ
 - **OpenAI SDK**: Passed via the `defaultHeaders` option in the OpenAI client constructor. This ensures headers are sent on every chat completion request.
 - **Settings API endpoints**: The `/api/settings/ollama/models` and `/api/settings/ollama/status` endpoints also include these headers in their `fetch()` calls to the Ollama server.
 - **Client cache key**: The client is re-created when either the base URL or the headers JSON changes.
-
-#### UI
-
-The `OllamaCard` component includes a "Custom Headers" section below the base URL input. Each header is an editable key-value pair with add/remove controls. Both key and value are plain text fields (not masked) for ease of editing. Headers are stored as JSON on save.
-
-#### Validation
-
-The headers JSON must be a flat `Record<string, string>` (no nested objects). Invalid JSON or non-string values are rejected with a 400 error on save.
+- **UI**: The `OllamaCard` component includes a "Custom Headers" section below the base URL input. Each header is an editable key-value pair with add/remove controls. Both key and value are plain text fields (not masked) for ease of editing. Headers are stored as JSON on save.
+- **Validation**: The headers JSON must be a flat `Record<string, string>` (no nested objects). Invalid JSON or non-string values are rejected with a 400 error on save.
 
 ### Dynamic Model Discovery
 
@@ -80,31 +74,13 @@ Ollama returns token usage in the OpenAI-compatible response format (`usage.prom
 
 ### Chat Adapter
 
-The chat adapter reuses `runOpenAITurn()` from `adapter-openai.ts` by adding an optional `client` parameter. When the provider is `ollama`, `adapter.ts` passes the Ollama client to `runOpenAITurn()`. No separate `adapter-ollama.ts` is needed.
-
-```typescript
-// adapter.ts
-if (provider === 'ollama') {
-  const { runOpenAITurn } = await import('./adapter-openai.js')
-  const { getOllamaClient } = await import('../providers/llm/ollama.js')
-  return runOpenAITurn(params, getOllamaClient())
-}
-
-// adapter-openai.ts — signature change
-export async function runOpenAITurn(
-  params: ChatTurnParams,
-  client?: OpenAI,
-): Promise<RunChatTurnResult> {
-  const actualClient = client ?? getOpenAIClient()
-  // ... rest unchanged, uses actualClient instead of getOpenAIClient()
-}
-```
+The chat adapter reuses `runOpenAITurn()` from `adapter-openai.ts` by adding an optional `externalClient` parameter. When the provider is `ollama`, `adapter.ts` passes the Ollama client to `runOpenAITurn()`. No separate `adapter-ollama.ts` is needed. When `externalClient` is provided, the OpenAI API key check is skipped.
 
 ### Streaming
 
 Ollama supports streaming via the OpenAI-compatible SSE format. The `streamMessage()` implementation follows the same pattern as the OpenAI provider.
 
-## Configuration
+### Configuration
 
 All Ollama settings are stored in the SQLite settings table, consistent with other providers. The base URL and custom headers are saved via the existing preferences API (`PATCH /api/settings/preferences`) by adding `ollama.base_url` and `ollama.custom_headers` to `PREF_KEYS` and `PREF_ALLOWED` (both with `null` to accept any string).
 
@@ -126,142 +102,7 @@ The settings page adds:
 - A dedicated `OllamaCard` component (analogous to `ClaudeCodeCard`) under the LLM provider section. It displays a base URL text input (not a secret field) and a "Test Connection" button that calls `GET /api/settings/ollama/status`, showing success with version and model count, or an error message.
 - When `ollama` is selected as a provider for any task, the model dropdown is populated dynamically from the Ollama instance instead of a static list.
 
-#### Provider Button Behavior
-
-Ollama is always shown as "configured" in the provider button group (no API key required). The `configuredKeys` map hardcodes `ollama: true`, similar to how `claude-code` checks `/api/chat/claude-code-status`.
-
-#### Model Selection on Provider Switch
-
-When the user switches to `ollama`, the frontend fetches `/api/settings/ollama/models` and auto-selects the first available model. The `ModelSelect` component branches internally: for `provider === 'ollama'`, it uses SWR to fetch the dynamic model list; for other providers, it uses the existing static `getModelGroups()` helper.
-
-## Key Files
-
-| File | Purpose |
-|---|---|
-| `server/providers/llm/ollama.ts` | Ollama LLM provider implementation |
-| `server/providers/llm/index.ts` | Register `ollama` in the provider map |
-| `server/chat/adapter.ts` | Add `ollama` routing case |
-| `server/chat/adapter-openai.ts` | Add optional `client` parameter to `runOpenAITurn()` |
-| `server/fetcher/ai.ts` | Add `'ollama'` to `AiBillingMode` union |
-| `shared/models.ts` | Add Ollama to provider constants and label map |
-| `server/routes/settings.ts` | Add `ollama` to allowed provider values, add Ollama API endpoints |
-| `src/pages/settings/sections/provider-config-section.tsx` | Add `OllamaCard` component |
-| `src/pages/settings/sections/task-model-section.tsx` | Dynamic model selector for Ollama, configuredKeys |
-| `src/lib/i18n.ts` | Add `provider.ollama` and Ollama-related i18n keys |
-| `server/providers/llm/ollama.test.ts` | Unit tests for Ollama provider |
-
-## API Endpoints
-
-### List Ollama Models
-
-```
-GET /api/settings/ollama/models
-```
-
-Proxies a request to `{ollama.base_url}/api/tags` and returns the model list. Returns `[]` if Ollama is unreachable.
-
-Response:
-
-```json
-{
-  "models": [
-    { "name": "llama3.2:latest", "size": 2019393189, "parameter_size": "3B" },
-    { "name": "gemma3:4b", "size": 3000000000, "parameter_size": "4B" }
-  ]
-}
-```
-
-### Test Ollama Connection
-
-```
-GET /api/settings/ollama/status
-```
-
-Checks connectivity to the configured Ollama server by calling `GET {base_url}/api/version` for the version string and `GET {base_url}/api/tags` for the model count.
-
-Response:
-
-```json
-{ "ok": true, "version": "0.9.0", "model_count": 5 }
-```
-
-or
-
-```json
-{ "ok": false, "error": "Connection refused" }
-```
-
-## Provider Implementation Details
-
-### `server/providers/llm/ollama.ts`
-
-```typescript
-import OpenAI from 'openai'
-import { getSetting } from '../../db.js'
-import type { LLMProvider, LLMMessageParams, LLMStreamResult } from './provider.js'
-
-let cachedBaseUrl = ''
-let cachedHeaders = ''
-let cachedClient: OpenAI | null = null
-
-export function getOllamaBaseUrl(): string {
-  return getSetting('ollama.base_url') || process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
-}
-
-export function getOllamaCustomHeaders(): Record<string, string> {
-  const raw = getSetting('ollama.custom_headers')
-  if (!raw) return {}
-  try { return JSON.parse(raw) } catch { return {} }
-}
-
-export function getOllamaClient(): OpenAI {
-  const baseUrl = getOllamaBaseUrl()
-  const headersJson = getSetting('ollama.custom_headers') || ''
-  if (cachedClient && baseUrl === cachedBaseUrl && headersJson === cachedHeaders) return cachedClient
-  cachedBaseUrl = baseUrl
-  cachedHeaders = headersJson
-  const customHeaders = headersJson ? getOllamaCustomHeaders() : {}
-  cachedClient = new OpenAI({
-    baseURL: `${baseUrl}/v1`,
-    apiKey: 'ollama',
-    defaultHeaders: customHeaders,
-  })
-  return cachedClient
-}
-
-export const ollamaProvider: LLMProvider = {
-  name: 'ollama',
-
-  requireKey() {
-    // no-op: no API key needed (same pattern as claude-code)
-  },
-
-  async createMessage(params: LLMMessageParams): Promise<LLMStreamResult> {
-    // Same implementation as openai.ts but using getOllamaClient()
-  },
-
-  async streamMessage(params: LLMMessageParams, onText: (delta: string) => void): Promise<LLMStreamResult> {
-    // Same implementation as openai.ts but using getOllamaClient()
-  },
-}
-```
-
-### `adapter-openai.ts` Changes
-
-`runOpenAITurn()` gains an optional `client` parameter. When provided, the API key check is skipped and the given client is used instead of `getOpenAIClient()`:
-
-```typescript
-export async function runOpenAITurn(
-  params: ChatTurnParams,
-  externalClient?: OpenAI,
-): Promise<RunChatTurnResult> {
-  if (!externalClient && !getSetting('api_key.openai')) {
-    throw new Error('OPENAI_KEY_NOT_SET')
-  }
-  const client = externalClient ?? getOpenAIClient()
-  // ... rest uses client
-}
-```
+Ollama is always shown as "configured" in the provider button group (no API key required). The `configuredKeys` map hardcodes `ollama: true`. When the user switches to `ollama`, the frontend fetches `/api/settings/ollama/models` and auto-selects the first available model. The `ModelSelect` component branches internally: for `provider === 'ollama'`, it uses SWR to fetch the dynamic model list; for other providers, it uses the existing static `getModelGroups()` helper.
 
 ### Model Validation
 
@@ -275,7 +116,17 @@ Since Ollama models are dynamic, the `validateProviderModel()` function in `sett
 - Add `ollama` to `SUB_AGENT_MODELS` with empty string (user must configure).
 - `MODELS_BY_PROVIDER` does **not** include `ollama` (models are dynamic, not static).
 
-## Error Handling
+### API Endpoints
+
+**List Ollama Models** — `GET /api/settings/ollama/models`
+
+Proxies a request to `{ollama.base_url}/api/tags` and returns the model list. Returns `[]` if Ollama is unreachable. Response: `{ "models": [{ "name": "llama3.2:latest", "size": 2019393189, "parameter_size": "3B" }] }`
+
+**Test Ollama Connection** — `GET /api/settings/ollama/status`
+
+Checks connectivity by calling `GET {base_url}/api/version` and `GET {base_url}/api/tags`. Response: `{ "ok": true, "version": "0.9.0", "model_count": 5 }` or `{ "ok": false, "error": "Connection refused" }`
+
+### Error Handling
 
 | Scenario | Behavior |
 |---|---|
@@ -288,66 +139,32 @@ Since Ollama models are dynamic, the `validateProviderModel()` function in `sett
 | Custom headers invalid JSON | Preferences API returns 400; headers are not saved |
 | Auth header rejected by proxy | Ollama returns 401/403; surfaced as provider error |
 
-### Logging
+No Ollama-specific log fields. The existing AI task logging records `provider`, `model`, `inputTokens`, and `outputTokens`, which is sufficient.
 
-No Ollama-specific log fields. The existing AI task logging records `provider`, `model`, `inputTokens`, and `outputTokens`, which is sufficient for Ollama as well.
+### Test Plan
 
-## Test Plan
+- **Unit tests** (`server/providers/llm/ollama.test.ts`): `createMessage`/`streamMessage` request format and token counts, client base URL from settings and default, `requireKey` no-throw, client cache invalidation on headers change, custom headers parsing and invalid JSON fallback.
+- **Integration**: Manual test with a locally installed Ollama instance. Not required for CI. `compose.yaml` includes `OLLAMA_BASE_URL: http://host.docker.internal:11434` for Docker environments.
 
-- **Unit tests** (`server/providers/llm/ollama.test.ts`):
-  - `createMessage` sends correct request format and returns text + token counts
-  - `streamMessage` accumulates streamed deltas and returns full text
-  - Client is constructed with correct base URL from settings
-  - Default base URL is used when setting is absent
-  - `requireKey` does not throw (no API key required)
-- **Integration**: Manual test with a locally installed Ollama instance. Not required for CI. `compose.yaml` includes `OLLAMA_BASE_URL: http://host.docker.internal:11434` for Docker environments. Developers install Ollama on their machine and run `ollama serve` for manual testing.
+### Out of Scope
 
-## Out of Scope
-
-- **Pull models from UI**: Users must install models via `ollama pull` on the command line. The UI only lists already-installed models.
+- **Pull models from UI**: Users must install models via `ollama pull` on the command line.
 - **GPU/resource monitoring**: No visibility into Ollama's resource usage from within Oksskolten.
-- **Model-specific parameters**: Temperature, top-p, and other sampling parameters are not configurable per-provider in the current architecture; this applies equally to Ollama.
-- **Ollama embeddings API**: Only the chat completions API is used. Embeddings for similarity search remain handled by Meilisearch.
+- **Model-specific parameters**: Temperature, top-p, and other sampling parameters are not configurable per-provider in the current architecture.
+- **Ollama embeddings API**: Only the chat completions API is used.
 
-## Current Status
+### Key Files
 
-Validation complete.
-
-Implementors MUST keep this section updated as they work.
-
-### Checklist
-
-- [x] `shared/models.ts` — Add `ollama` to `DEFAULT_MODELS`, `PROVIDER_LABELS`, `LLM_TASK_PROVIDERS`, `SUB_AGENT_MODELS`
-- [x] `server/providers/llm/ollama.ts` — Ollama LLM provider with cached client
-- [x] `server/providers/llm/ollama.test.ts` — Unit tests for Ollama provider (7 tests)
-- [x] `server/providers/llm/index.ts` — Register `ollama` in provider map
-- [x] `server/fetcher/ai.ts` — Add `'ollama'` to `AiBillingMode`
-- [x] `server/chat/adapter-openai.ts` — Add optional `client` param to `runOpenAITurn()`
-- [x] `server/chat/adapter.ts` — Add `ollama` routing case
-- [x] `server/routes/settings.ts` — Add `ollama` to `PREF_KEYS`/`PREF_ALLOWED`, add `/api/settings/ollama/models` and `/api/settings/ollama/status` endpoints, skip model validation for `ollama`
-- [x] `src/lib/i18n.ts` — Add `provider.ollama` and Ollama UI i18n keys
-- [x] `src/pages/settings/sections/provider-config-section.tsx` — Add `OllamaCard` component
-- [x] `src/pages/settings/sections/task-model-section.tsx` — Dynamic model selector for Ollama, `configuredKeys['ollama'] = true`
-- [x] `server/providers/llm/ollama.ts` — Add custom headers support (`defaultHeaders`, cache key includes headers)
-- [x] `server/routes/settings.ts` — Add `ollama.custom_headers` to `PREF_KEYS`/`PREF_ALLOWED`, pass headers in models/status fetch
-- [x] `src/pages/settings/sections/provider-config-section.tsx` — Add custom headers key-value UI to `OllamaCard`
-- [x] `src/lib/i18n.ts` — Add custom headers i18n keys
-- [x] `compose.yaml` — Add `OLLAMA_BASE_URL` environment variable
-- [x] `server/providers/llm/ollama.ts` — Base URL fallback: DB setting → env var → default
-- [x] `src/pages/settings/sections/task-model-section.tsx` — Fix `hasAnyLlmKey` to include Ollama
-
-### Discrepancies
-
-- **Spec said header values are password fields** — spec updated to match implementation (plain text, editable key-value). Resolution: spec updated
-- **Spec said "Docker Compose is not modified"** — spec updated to reflect compose.yaml change. Resolution: spec updated
-- **Spec PREF_ALLOWED for model fields changed to null** — spec updated with rationale in Model Validation section. Resolution: spec updated
-- **adapter-openai.ts parameter name** — spec updated from `client` to `externalClient`. Resolution: spec updated
-
-### Updates
-
-- 2026-03-20: Spec interview completed. All design decisions documented.
-- 2026-03-20: `shared/models.ts` — Added `ollama` to all provider constants. `src/lib/i18n.ts` — Added `provider.ollama` and Ollama UI i18n keys. Typecheck passes.
-- 2026-03-20: All initial checklist items implemented. Server: ollama.ts provider, index.ts registration, ai.ts billing type, adapter-openai.ts client param, adapter.ts routing, settings.ts PREF_KEYS + endpoints. Frontend: OllamaCard component, dynamic ModelSelect, configuredKeys. 7 unit tests pass. Typecheck clean.
-- 2026-03-20: Spec updated with custom headers support, OLLAMA_BASE_URL env var fallback, compose.yaml change, hasAnyLlmKey fix. New checklist items added.
-- 2026-03-20: All items implemented. Custom headers: ollama.ts (defaultHeaders + cache key), settings.ts (PREF_KEYS + ollamaFetch), OllamaCard (key-value UI with masked values), i18n keys. 11 unit tests, 1491 total tests pass. Typecheck clean.
-- 2026-03-20: Validation completed. 4 discrepancies found and resolved (all spec updates): header UI masking, compose.yaml change, PREF_ALLOWED null, parameter naming.
+| File | Purpose |
+|---|---|
+| `server/providers/llm/ollama.ts` | Ollama LLM provider implementation |
+| `server/providers/llm/index.ts` | Register `ollama` in the provider map |
+| `server/chat/adapter.ts` | Add `ollama` routing case |
+| `server/chat/adapter-openai.ts` | Add optional `externalClient` parameter to `runOpenAITurn()` |
+| `server/fetcher/ai.ts` | Add `'ollama'` to `AiBillingMode` union |
+| `shared/models.ts` | Add Ollama to provider constants and label map |
+| `server/routes/settings.ts` | Add `ollama` to allowed provider values, add Ollama API endpoints |
+| `src/pages/settings/sections/provider-config-section.tsx` | Add `OllamaCard` component |
+| `src/pages/settings/sections/task-model-section.tsx` | Dynamic model selector for Ollama, configuredKeys |
+| `src/lib/i18n.ts` | Add `provider.ollama` and Ollama-related i18n keys |
+| `server/providers/llm/ollama.test.ts` | Unit tests for Ollama provider |
