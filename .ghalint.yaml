@@ -1,0 +1,5 @@
+excludes:
+  # tagpr needs persist-credentials to push via the GitHub App token
+  - policy_name: checkout_persist_credentials_should_be_false
+    workflow_file_path: .github/workflows/tagpr.yaml
+    job_name: tagpr
