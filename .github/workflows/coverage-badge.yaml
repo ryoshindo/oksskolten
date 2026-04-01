@@ -10,6 +10,7 @@ jobs:
   update-badges:
     name: Update Coverage Badges
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: github.event.workflow_run.conclusion == 'success'
     permissions:
       actions: read
@@ -20,10 +21,10 @@ jobs:
           SERVER=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${WORKFLOW_RUN_ID}/artifacts" --jq '[.artifacts[] | select(.name=="server-coverage")] | length')
           CLIENT=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${WORKFLOW_RUN_ID}/artifacts" --jq '[.artifacts[] | select(.name=="client-coverage")] | length')
           if [[ "$SERVER" == "0" || "$CLIENT" == "0" ]]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "No coverage artifacts found (tests were likely skipped). Skipping badge update."
           else
-            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -50,8 +51,8 @@ jobs:
         run: |
           SERVER_PCT=$(jq '.total.lines.pct' artifacts/server/coverage-summary.json)
           CLIENT_PCT=$(jq '.total.lines.pct' artifacts/client/coverage-summary.json)
-          echo "SERVER_PCT=$SERVER_PCT" >> $GITHUB_ENV
-          echo "CLIENT_PCT=$CLIENT_PCT" >> $GITHUB_ENV
+          echo "SERVER_PCT=$SERVER_PCT" >> "$GITHUB_ENV"
+          echo "CLIENT_PCT=$CLIENT_PCT" >> "$GITHUB_ENV"
 
       - name: Update server coverage badge
         if: steps.check.outputs.skip != 'true'
