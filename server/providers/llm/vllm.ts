@@ -23,7 +23,6 @@ export function getVllmClient(): OpenAI {
   cachedClient = new OpenAI({
     baseURL: baseUrl.replace(/\/+$/, '') + '/v1',
     apiKey: apiKey || 'vllm', // Required by SDK even if not used by vLLM
-    dangerouslyAllowBrowser: true,
   })
   return cachedClient
 }
