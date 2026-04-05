@@ -1,20 +1,49 @@
 services:
   server:
-    # Option A: Build locally (default)
     build:
+      context: .
       target: runtime
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        GIT_TAG: ${GIT_TAG:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
     # Option B: Use pre-built image from GHCR (comment out "build" above and uncomment below)
     # image: ghcr.io/babarot/oksskolten:latest
-    command: []
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: file:/data/rss.db
+      RSS_BRIDGE_URL: http://rss-bridge:80
+      FLARESOLVERR_URL: http://flaresolverr:8191
+      FLARESOLVERR_CONCURRENCY: "0"
+      FETCH_CONCURRENCY: "5"
+      PARSE_MAX_THREADS: "2"
+      CRON_SCHEDULE: "*/5 * * * *"
+      MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
-    volumes: !override
+    env_file:
+      - path: .env
+        required: false
+    volumes:
       - ${DATA_DIR:-./data}:/data
-    ports: !override []
     expose:
       - "3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      rss-bridge:
+        condition: service_started
+      flaresolverr:
+        condition: service_started
+      meilisearch:
+        condition: service_healthy
+    networks:
+      - internal
 
   meilisearch:
     environment:
@@ -27,10 +56,6 @@ services:
 
   flaresolverr:
     ports: !override []
-
-  frontend:
-    deploy:
-      replicas: 0
 
   cloudflared:
     image: cloudflare/cloudflared

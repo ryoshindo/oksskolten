@@ -1,69 +1,4 @@
 services:
-  server:
-    build:
-      context: .
-      target: dev
-      args:
-        GIT_COMMIT: ${GIT_COMMIT:-unknown}
-        GIT_TAG: ${GIT_TAG:-unknown}
-        BUILD_DATE: ${BUILD_DATE:-unknown}
-    command: npm run dev:server
-    environment:
-      NODE_ENV: development
-      PORT: 3000
-      DATABASE_URL: file:/data/rss.db
-      RSS_BRIDGE_URL: http://rss-bridge:80
-      FLARESOLVERR_URL: http://flaresolverr:8191
-      FLARESOLVERR_CONCURRENCY: "0"
-      FETCH_CONCURRENCY: "5"
-      PARSE_MAX_THREADS: "2"
-      CRON_SCHEDULE: "*/5 * * * *"
-      MEILI_URL: http://meilisearch:7700
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
-    env_file:
-      - path: .env
-        required: false
-    volumes:
-      - .:/app
-      - server_node_modules:/app/node_modules
-      - ${DATA_DIR:-./data}:/data
-    ports:
-      - "3000:3000"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
-    depends_on:
-      rss-bridge:
-        condition: service_started
-      flaresolverr:
-        condition: service_started
-      meilisearch:
-        condition: service_healthy
-    networks:
-      - internal
-
-  frontend:
-    build:
-      context: .
-      target: dev
-    command: npm run dev -- --host 0.0.0.0 --port 5173
-    environment:
-      VITE_API_PROXY_TARGET: http://server:3000
-      CHOKIDAR_USEPOLLING: true
-    volumes:
-      - .:/app
-      - frontend_node_modules:/app/node_modules
-    ports:
-      - "5173:5173"
-    depends_on:
-      server:
-        condition: service_healthy
-    networks:
-      - internal
-
   meilisearch:
     image: getmeili/meilisearch:v1.13
     restart: unless-stopped
@@ -102,8 +37,6 @@ services:
 
 volumes:
   meili_data:
-  server_node_modules:
-  frontend_node_modules:
 
 networks:
   internal:
