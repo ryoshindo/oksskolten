@@ -301,20 +301,26 @@ const summarizeArticlesTool: ToolDef = {
     const ids = input.article_ids as number[]
     if (!Array.isArray(ids) || ids.length === 0) return JSON.stringify([])
 
-    const results = await Promise.all(ids.map(async (id) => {
-      const article = getArticleById(id)
-      if (!article) return { id, error: 'Article not found' }
-      if (article.summary) return { id, summary: article.summary, cached: true }
-      if (!article.full_text) return { id, error: 'No full text available' }
+    const results: any[] = []
+    const CONCURRENCY = 3
+    for (let i = 0; i < ids.length; i += CONCURRENCY) {
+      const chunk = ids.slice(i, i + CONCURRENCY)
+      const chunkResults = await Promise.all(chunk.map(async (id) => {
+        const article = getArticleById(id)
+        if (!article) return { id, error: 'Article not found' }
+        if (article.summary) return { id, summary: article.summary, cached: true }
+        if (!article.full_text) return { id, error: 'No full text available' }
 
-      try {
-        const { summary } = await summarizeArticle(article.full_text)
-        updateArticleContent(article.id, { summary })
-        return { id, summary }
-      } catch (err) {
-        return { id, error: err instanceof Error ? err.message : String(err) }
-      }
-    }))
+        try {
+          const { summary } = await summarizeArticle(article.full_text)
+          updateArticleContent(article.id, { summary })
+          return { id, summary }
+        } catch (err) {
+          return { id, error: err instanceof Error ? err.message : String(err) }
+        }
+      }))
+      results.push(...chunkResults)
+    }
 
     return JSON.stringify(results)
   },

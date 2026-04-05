@@ -49,13 +49,14 @@ function jsonSchemaToZod(
         } else if (prop.items?.type === 'string') {
           zodType = z.array(z.string())
         } else {
-          zodType = z.array(z.any())
+          throw new Error(`Unsupported array item type: ${prop.items?.type}`)
         }
         break
       case 'string':
-      default:
         zodType = z.string()
         break
+      default:
+        throw new Error(`Unsupported type: ${prop.type}`)
     }
 
     if (prop.description) {
