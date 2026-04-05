@@ -432,8 +432,8 @@ export function getRetryArticles(
         OR ${BACKOFF_DEADLINE} <= datetime('now')
       )
     ORDER BY retry_count ASC, last_retry_at ASC
-    LIMIT :batch_limit
-  `).all({ max_attempts: maxAttempts, batch_limit: batchLimit }) as Article[]
+    LIMIT ${batchLimit}
+  `).all({ max_attempts: maxAttempts }) as Article[]
 }
 
 export interface RetryStats {
