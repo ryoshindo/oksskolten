@@ -96,7 +96,7 @@ if (updated > 0) {
 }
 ```
 
-`syncAllScoredArticlesToSearch()` is added to `server/search/sync.ts`. It queries `id, score` using the shared `SCORED_ARTICLES_WHERE` constant (exported from `server/db/articles.ts`) and performs batched partial document updates in Meilisearch (batch size 1000, matching `rebuildSearchIndex()`). The function is async and awaits each Meilisearch call to ensure sync completion before logging success. It skips execution if an index rebuild is in progress (the rebuild will include fresh scores).
+`syncAllScoredArticlesToSearch()` is added to `server/search/sync.ts`. It queries `id, score` using the shared `SCORED_ARTICLES_WHERE` constant (exported from `server/db/articles.ts`) and performs batched partial document updates in Meilisearch (batch size 1000, matching `rebuildSearchIndex()`). The function is async and awaits each Meilisearch call to ensure sync completion before logging success. If an index rebuild is in progress, it still writes to the live production index and also stamps every touched id into the rebuild change log so the post-swap replay re-fetches the fresh scores into the new index.
 
 ### Logging
 

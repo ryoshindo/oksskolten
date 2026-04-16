@@ -21,11 +21,19 @@ export function _setRebuilding(value: boolean): void {
 
 // --- Change log for rebuild consistency ---
 
+// During rebuild we only track *which* ids moved; replay re-fetches the latest
+// row from SQLite. This avoids order hazards when multiple concurrent writers
+// (upsert / filter update / score batch) touch the same id.
 type ChangeEntry =
-  | { action: 'upsert'; id: number; doc: MeiliArticleDoc }
+  | { action: 'touch'; id: number }
   | { action: 'delete'; id: number }
 
 let changeLog: ChangeEntry[] | null = null
+
+/** @internal Test-only helper to seed/reset the rebuild change log */
+export function _setChangeLogForTest(value: ChangeEntry[] | null): void {
+  changeLog = value
+}
 
 // --- Index settings ---
 
@@ -40,6 +48,39 @@ const INDEX_SETTINGS = {
 
 const BATCH_SIZE = 1000
 
+// Per-query page size for the id-cursor loop. Kept small so that each Turso
+// round-trip stays under a few MB / a couple seconds — `full_text` can reach
+// ~280KB per row, and libsql-client's .all() blocks the Node event loop.
+let FETCH_BATCH = 50
+
+/** @internal Test-only helper to shrink the per-query page size */
+export function _setFetchBatchForTest(value: number): void {
+  FETCH_BATCH = value
+}
+
+const ARTICLE_DOC_SELECT = `
+  SELECT id, feed_id, category_id, title,
+         COALESCE(full_text, '') AS full_text,
+         COALESCE(full_text_translated, '') AS full_text_translated,
+         lang,
+         COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
+         COALESCE(score, 0) AS score,
+         (seen_at IS NULL) AS is_unread,
+         (liked_at IS NOT NULL) AS is_liked,
+         (bookmarked_at IS NOT NULL) AS is_bookmarked
+  FROM active_articles
+`
+
+// SQLite returns 0/1 for boolean expressions; Meilisearch needs true/false.
+function normalizeBooleans(row: MeiliArticleDoc): MeiliArticleDoc {
+  return {
+    ...row,
+    is_unread: Boolean(row.is_unread),
+    is_liked: Boolean(row.is_liked),
+    is_bookmarked: Boolean(row.is_bookmarked),
+  }
+}
+
 export async function rebuildSearchIndex(): Promise<void> {
   if (rebuilding) {
     log.info('Rebuild already in progress, skipping')
@@ -47,6 +88,8 @@ export async function rebuildSearchIndex(): Promise<void> {
   }
   rebuilding = true
   changeLog = []
+
+  let totalIndexed = 0
 
   try {
     const client = getSearchClient()
@@ -66,36 +109,41 @@ export async function rebuildSearchIndex(): Promise<void> {
     const stagingIndex = client.index(ARTICLES_STAGING_INDEX)
     await stagingIndex.updateSettings(INDEX_SETTINGS).waitTask({ timeout: 60_000 })
 
-    // 3. Fetch all articles from SQLite and batch-insert into staging
-    const rows = getDb().prepare(`
-      SELECT id, feed_id, category_id, title,
-             COALESCE(full_text, '') AS full_text,
-             COALESCE(full_text_translated, '') AS full_text_translated,
-             lang,
-             COALESCE(CAST(strftime('%s', published_at) AS INTEGER), 0) AS published_at,
-             COALESCE(score, 0) AS score,
-             (seen_at IS NULL) AS is_unread,
-             (liked_at IS NOT NULL) AS is_liked,
-             (bookmarked_at IS NOT NULL) AS is_bookmarked
-      FROM active_articles
-    `).all() as MeiliArticleDoc[]
+    // 3. Paginate SQLite by id cursor. Freeze the upper bound so concurrent
+    //    inserts after rebuild start don't make the loop a moving target —
+    //    newer rows flow through the change log and replay after swap.
+    const maxIdRow = getDb().prepare(
+      'SELECT COALESCE(MAX(id), 0) AS max_id FROM active_articles',
+    ).get() as { max_id: number }
+    const maxId = maxIdRow.max_id
+    const totalRow = getDb().prepare(
+      'SELECT COUNT(*) AS total FROM active_articles WHERE id <= ?',
+    ).get(maxId) as { total: number }
+    const totalRows = totalRow.total
 
-    // SQLite returns 0/1 for boolean expressions; Meilisearch needs true/false
-    const docs = rows.map((row) => ({
-      ...row,
-      is_unread: Boolean(row.is_unread),
-      is_liked: Boolean(row.is_liked),
-      is_bookmarked: Boolean(row.is_bookmarked),
-    }))
+    let lastId = 0
+    while (true) {
+      const rows = getDb().prepare(`
+        ${ARTICLE_DOC_SELECT}
+        WHERE id > @lastId AND id <= @maxId
+        ORDER BY id
+        LIMIT @batch
+      `).all({ lastId, maxId, batch: FETCH_BATCH }) as MeiliArticleDoc[]
 
-    for (let i = 0; i < docs.length; i += BATCH_SIZE) {
-      const batch = docs.slice(i, i + BATCH_SIZE)
-      await stagingIndex.addDocuments(batch).waitTask({ timeout: 60_000 })
+      if (rows.length === 0) break
+
+      const docs = rows.map(normalizeBooleans)
+      await stagingIndex.addDocuments(docs).waitTask({ timeout: 60_000 })
+
+      lastId = rows[rows.length - 1].id
+      totalIndexed += rows.length
+      log.info(
+        `Index rebuild: indexed ${rows.length} rows (lastId=${lastId}, progress=${totalIndexed}/${totalRows})`,
+      )
     }
 
     // 4. Promote staging to production
     if (indexSet.has(ARTICLES_INDEX)) {
-      // Swap articles <-> articles_staging, then clean up old data
       await client.swapIndexes([
         { indexes: [ARTICLES_INDEX, ARTICLES_STAGING_INDEX] } as any,
       ]).waitTask({ timeout: 60_000 })
@@ -109,26 +157,46 @@ export async function rebuildSearchIndex(): Promise<void> {
       await client.deleteIndex(ARTICLES_STAGING_INDEX).waitTask({ timeout: 60_000 })
     }
 
-    // 5. Replay change log
+    // 5. Replay change log. Resolve order-independently via set arithmetic —
+    //    delete wins over touch — then re-fetch current DB state for each touch
+    //    so the new prod index reflects whatever landed during the rebuild.
     if (changeLog && changeLog.length > 0) {
       const prodIndex = client.index(ARTICLES_INDEX)
-      const upserts = changeLog.filter((e): e is Extract<ChangeEntry, { action: 'upsert' }> => e.action === 'upsert')
-      const deletes = changeLog.filter((e): e is Extract<ChangeEntry, { action: 'delete' }> => e.action === 'delete')
+      const touchedIds = new Set<number>()
+      const deletedIds = new Set<number>()
+      for (const entry of changeLog) {
+        if (entry.action === 'touch') touchedIds.add(entry.id)
+        else deletedIds.add(entry.id)
+      }
+      for (const id of deletedIds) touchedIds.delete(id)
 
-      if (upserts.length > 0) {
-        await prodIndex.addDocuments(upserts.map((e) => e.doc)).waitTask({ timeout: 60_000 })
+      if (touchedIds.size > 0) {
+        const ids = [...touchedIds]
+        for (let i = 0; i < ids.length; i += FETCH_BATCH) {
+          const slice = ids.slice(i, i + FETCH_BATCH)
+          const placeholders = slice.map(() => '?').join(',')
+          const refetched = getDb().prepare(
+            `${ARTICLE_DOC_SELECT} WHERE id IN (${placeholders})`,
+          ).all(...slice) as MeiliArticleDoc[]
+          if (refetched.length > 0) {
+            await prodIndex.addDocuments(refetched.map(normalizeBooleans)).waitTask({ timeout: 60_000 })
+          }
+        }
       }
-      for (const del of deletes) {
-        await prodIndex.deleteDocument(del.id)
+      for (const id of deletedIds) {
+        await prodIndex.deleteDocument(id)
       }
+      log.info(
+        `Index rebuild: replayed ${touchedIds.size} touch, ${deletedIds.size} delete from change log`,
+      )
     }
 
     searchReady = true
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1)
-    log.info(`Index rebuild complete: ${docs.length} articles in ${elapsed}s`)
+    log.info(`Index rebuild complete: ${totalIndexed} articles in ${elapsed}s`)
   } catch (err) {
     // On failure: keep searchReady as-is (true if previously built, false if first time)
-    log.error('Index rebuild failed:', err)
+    log.error(`Index rebuild failed after ${totalIndexed} rows:`, err)
   } finally {
     changeLog = null
     rebuilding = false
@@ -136,18 +204,20 @@ export async function rebuildSearchIndex(): Promise<void> {
 }
 
 // --- Fire-and-forget sync helpers ---
+//
+// Each helper records a changeLog entry *before* scheduling the Meili write.
+// Ordering rationale: if the write awaits or races with a concurrent rebuild,
+// the in-memory touch/delete entry must already be in changeLog so that replay
+// can re-fetch the latest DB state and apply it to the new prod index.
 
 export function syncArticleToSearch(doc: MeiliArticleDoc): void {
   try {
+    if (changeLog) changeLog.push({ action: 'touch', id: doc.id })
     const client = getSearchClient()
     const index = client.index(ARTICLES_INDEX)
     index.addDocuments([doc]).catch((err) => {
       log.error('Failed to sync article:', err)
     })
-
-    if (changeLog) {
-      changeLog.push({ action: 'upsert', id: doc.id, doc })
-    }
   } catch (err) {
     log.error('Failed to sync article:', err)
   }
@@ -155,15 +225,12 @@ export function syncArticleToSearch(doc: MeiliArticleDoc): void {
 
 export function deleteArticleFromSearch(id: number): void {
   try {
+    if (changeLog) changeLog.push({ action: 'delete', id })
     const client = getSearchClient()
     const index = client.index(ARTICLES_INDEX)
     index.deleteDocument(id).catch((err) => {
       log.error('Failed to delete article from index:', err)
     })
-
-    if (changeLog) {
-      changeLog.push({ action: 'delete', id })
-    }
   } catch (err) {
     log.error('Failed to delete article from index:', err)
   }
@@ -171,6 +238,7 @@ export function deleteArticleFromSearch(id: number): void {
 
 export function syncArticleScoreToSearch(id: number, score: number): void {
   try {
+    if (changeLog) changeLog.push({ action: 'touch', id })
     const client = getSearchClient()
     const index = client.index(ARTICLES_INDEX)
     index.updateDocuments([{ id, score }]).catch((err) => {
@@ -184,6 +252,9 @@ export function syncArticleScoreToSearch(id: number, score: number): void {
 export function syncArticleFiltersToSearch(updates: { id: number; is_unread?: boolean; is_liked?: boolean; is_bookmarked?: boolean }[]): void {
   if (updates.length === 0) return
   try {
+    if (changeLog) {
+      for (const { id } of updates) changeLog.push({ action: 'touch', id })
+    }
     const client = getSearchClient()
     const index = client.index(ARTICLES_INDEX)
     index.updateDocuments(updates).catch((err) => {
@@ -197,17 +268,14 @@ export function syncArticleFiltersToSearch(updates: { id: number; is_unread?: bo
 export function deleteArticlesFromSearch(articleIds: number[]): void {
   if (articleIds.length === 0) return
   try {
+    if (changeLog) {
+      for (const id of articleIds) changeLog.push({ action: 'delete', id })
+    }
     const client = getSearchClient()
     const index = client.index(ARTICLES_INDEX)
     index.deleteDocuments({ filter: `id IN [${articleIds.join(',')}]` }).catch((err) => {
       log.error('Failed to batch delete articles:', err)
     })
-
-    if (changeLog) {
-      for (const id of articleIds) {
-        changeLog.push({ action: 'delete', id })
-      }
-    }
   } catch (err) {
     log.error('Failed to batch delete articles:', err)
   }
@@ -216,21 +284,26 @@ export function deleteArticlesFromSearch(articleIds: number[]): void {
 /**
  * Bulk-sync scores for all articles that have engagement or a non-zero score.
  * Uses the shared SCORED_ARTICLES_WHERE clause from server/db/articles.ts.
- * Called after the daily score recalculation batch to keep Meilisearch in sync.
- * Skips if an index rebuild is in progress (the rebuild will include fresh scores).
+ * Called after the score recalculation batch to keep Meilisearch in sync.
+ *
+ * During a concurrent rebuild we still write to the live prod index (so it
+ * stays fresh if rebuild fails) AND stamp touch entries up-front so replay
+ * re-fetches the latest scores into the new prod index after swap.
  */
 export async function syncAllScoredArticlesToSearch(): Promise<number> {
-  if (rebuilding) {
-    log.info('Index rebuild in progress, skipping score sync')
-    return 0
-  }
-
   const rows = getDb().prepare(`
     SELECT id, score FROM active_articles
     WHERE ${SCORED_ARTICLES_WHERE}
   `).all() as { id: number; score: number }[]
 
   if (rows.length === 0) return 0
+
+  // Push every touch entry *before* the first await. If rebuild swaps and
+  // replays mid-loop, we lose any entries pushed after `finally` nulls
+  // changeLog, and those score updates would silently vanish on swap.
+  if (changeLog) {
+    for (const { id } of rows) changeLog.push({ action: 'touch', id })
+  }
 
   const client = getSearchClient()
   const index = client.index(ARTICLES_INDEX)
@@ -246,17 +319,14 @@ export async function syncAllScoredArticlesToSearch(): Promise<number> {
 export function syncArticlesByFeedToSearch(docs: MeiliArticleDoc[]): void {
   if (docs.length === 0) return
   try {
+    if (changeLog) {
+      for (const doc of docs) changeLog.push({ action: 'touch', id: doc.id })
+    }
     const client = getSearchClient()
     const index = client.index(ARTICLES_INDEX)
     index.addDocuments(docs).catch((err) => {
       log.error('Failed to batch sync articles:', err)
     })
-
-    if (changeLog) {
-      for (const doc of docs) {
-        changeLog.push({ action: 'upsert', id: doc.id, doc })
-      }
-    }
   } catch (err) {
     log.error('Failed to batch sync articles:', err)
   }
