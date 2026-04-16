@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { arxivHtmlUrl, fetchFullTextArxivAware, ARXIV_HTML_STUB_THRESHOLD } from './arxiv.js'
+import {
+  arxivHtmlUrl,
+  huggingFaceToArxivAbsUrl,
+  fetchFullTextArxivAware,
+  ARXIV_HTML_STUB_THRESHOLD,
+} from './arxiv.js'
 import * as content from './content.js'
 import type { ParseHtmlResult } from './contentWorker.js'
 
@@ -23,6 +28,31 @@ describe('arxivHtmlUrl', () => {
   it('returns null for non-arxiv URLs', () => {
     expect(arxivHtmlUrl('https://example.com/abs/2401.12345')).toBeNull()
     expect(arxivHtmlUrl('https://arxiv.org/pdf/2401.12345')).toBeNull()
+  })
+})
+
+describe('huggingFaceToArxivAbsUrl', () => {
+  it('converts huggingface papers URL to arxiv abs URL', () => {
+    expect(huggingFaceToArxivAbsUrl('https://huggingface.co/papers/2401.12345')).toBe(
+      'https://arxiv.org/abs/2401.12345',
+    )
+  })
+
+  it('preserves version suffix', () => {
+    expect(huggingFaceToArxivAbsUrl('https://huggingface.co/papers/2401.12345v2')).toBe(
+      'https://arxiv.org/abs/2401.12345v2',
+    )
+  })
+
+  it('strips query and fragment', () => {
+    expect(
+      huggingFaceToArxivAbsUrl('https://huggingface.co/papers/2401.12345?foo=bar#sec'),
+    ).toBe('https://arxiv.org/abs/2401.12345')
+  })
+
+  it('returns null for non-huggingface URLs', () => {
+    expect(huggingFaceToArxivAbsUrl('https://arxiv.org/abs/2401.12345')).toBeNull()
+    expect(huggingFaceToArxivAbsUrl('https://huggingface.co/models/foo')).toBeNull()
   })
 })
 
@@ -97,5 +127,28 @@ describe('fetchFullTextArxivAware', () => {
     const r = await fetchFullTextArxivAware('https://arxiv.org/abs/2401.12345')
     expect(r.source).toBe('html')
     expect(r.fullText).toBe('stub')
+  })
+
+  it('rewrites huggingface papers URL and fetches arxiv html full text', async () => {
+    const hfUrl = 'https://huggingface.co/papers/2401.12345'
+    const htmlUrl = 'https://arxiv.org/html/2401.12345'
+    spy.mockResolvedValueOnce(result('x'.repeat(ARXIV_HTML_STUB_THRESHOLD + 100)))
+    const r = await fetchFullTextArxivAware(hfUrl)
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith(htmlUrl, undefined)
+    expect(r.source).toBe('html')
+    expect(r.sourceUrl).toBe(htmlUrl)
+  })
+
+  it('falls back to arxiv abs (not huggingface) when html returns a stub', async () => {
+    const hfUrl = 'https://huggingface.co/papers/2401.12345'
+    const absUrl = 'https://arxiv.org/abs/2401.12345'
+    spy.mockResolvedValueOnce(result('stub'))
+    spy.mockResolvedValueOnce(result('abstract body that is longer than the stub'))
+    const r = await fetchFullTextArxivAware(hfUrl)
+    expect(spy).toHaveBeenCalledTimes(2)
+    expect(spy).toHaveBeenNthCalledWith(2, absUrl, undefined)
+    expect(r.source).toBe('abs')
+    expect(r.sourceUrl).toBe(absUrl)
   })
 })

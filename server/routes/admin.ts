@@ -1,7 +1,12 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { fetchAllFeeds, fetchProgress, getFeedState, type FetchProgressEvent } from '../fetcher.js'
-import { arxivHtmlUrl, fetchFullTextArxivAware, ARXIV_HTML_STUB_THRESHOLD } from '../fetcher/arxiv.js'
+import {
+  arxivHtmlUrl,
+  huggingFaceToArxivAbsUrl,
+  fetchFullTextArxivAware,
+  ARXIV_HTML_STUB_THRESHOLD,
+} from '../fetcher/arxiv.js'
 import { getArticleById, updateArticleContent } from '../db/index.js'
 import { getDb } from '../db/connection.js'
 import { requireJson } from '../auth.js'
@@ -93,8 +98,12 @@ export async function adminRoutes(api: FastifyInstance): Promise<void> {
         return
       }
 
-      if (!arxivHtmlUrl(article.url)) {
-        reply.status(400).send({ error: 'Article URL is not an arxiv abs URL', url: article.url })
+      const absUrl = huggingFaceToArxivAbsUrl(article.url) ?? article.url
+      if (!arxivHtmlUrl(absUrl)) {
+        reply.status(400).send({
+          error: 'Article URL is not an arxiv abs or huggingface papers URL',
+          url: article.url,
+        })
         return
       }
 
