@@ -16,7 +16,8 @@ import {
 import { Semaphore, CONCURRENCY, errorMessage } from './fetcher/util.js'
 import { detectAndStoreSimilarArticles } from './similarity.js'
 import { type FetchProgressEvent, emitProgress, markFeedDone } from './fetcher/progress.js'
-import { fetchFullText, isBotBlockPage, convertHtmlToMarkdown, markdownToExcerpt, MIN_EXTRACTED_LENGTH } from './fetcher/content.js'
+import { isBotBlockPage, convertHtmlToMarkdown, markdownToExcerpt, MIN_EXTRACTED_LENGTH } from './fetcher/content.js'
+import { fetchFullTextArxivAware } from './fetcher/arxiv.js'
 import { type FetchRssResult, fetchAndParseRss, RateLimitError } from './fetcher/rss.js'
 import { computeInterval, computeEmpiricalInterval, sqliteFuture, DEFAULT_INTERVAL } from './fetcher/schedule.js'
 import { detectLanguage } from './fetcher/ai.js'
@@ -76,7 +77,7 @@ export async function fetchArticleContent(
     excerpt = markdownToExcerpt(fullText)
   } else {
     try {
-      const result = await fetchFullText(url, { requiresJsChallenge: options?.requiresJsChallenge })
+      const result = await fetchFullTextArxivAware(url, { requiresJsChallenge: options?.requiresJsChallenge })
       fullText = result.fullText
       ogImage = result.ogImage
       excerpt = result.excerpt
