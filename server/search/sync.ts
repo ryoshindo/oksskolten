@@ -19,6 +19,11 @@ export function _setRebuilding(value: boolean): void {
   rebuilding = value
 }
 
+/** @internal Test-only helper to control searchReady flag */
+export function _setSearchReadyForTest(value: boolean): void {
+  searchReady = value
+}
+
 // --- Change log for rebuild consistency ---
 
 // During rebuild we only track *which* ids moved; replay re-fetches the latest
@@ -79,6 +84,32 @@ function normalizeBooleans(row: MeiliArticleDoc): MeiliArticleDoc {
     is_liked: Boolean(row.is_liked),
     is_bookmarked: Boolean(row.is_bookmarked),
   }
+}
+
+/**
+ * Startup-only fast path: if the `articles` index already exists in Meili and
+ * has documents, mark search ready and skip the full rebuild. The 6h cron
+ * continues to refresh the index, so stale data is bounded. Any probe failure
+ * (Meili unreachable, schema mismatch, etc.) falls through to a full rebuild.
+ */
+export async function ensureSearchReady(): Promise<void> {
+  try {
+    const client = getSearchClient()
+    const { results } = await client.getIndexes()
+    const hasArticles = results.some((idx: { uid: string }) => idx.uid === ARTICLES_INDEX)
+    if (hasArticles) {
+      const stats = await client.index(ARTICLES_INDEX).getStats()
+      const docs = stats?.numberOfDocuments ?? 0
+      if (docs > 0) {
+        searchReady = true
+        log.info(`Search index ready: ${docs} existing docs, skipping initial rebuild`)
+        return
+      }
+    }
+  } catch (err) {
+    log.warn('Failed to probe existing search index, falling back to rebuild:', err)
+  }
+  await rebuildSearchIndex()
 }
 
 export async function rebuildSearchIndex(): Promise<void> {

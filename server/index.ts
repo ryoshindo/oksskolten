@@ -18,7 +18,7 @@ import { authRoutes } from './authRoutes.js'
 import { passkeyRoutes } from './passkeyRoutes.js'
 import { oauthRoutes } from './oauthRoutes.js'
 import { fetchAllFeeds } from './fetcher.js'
-import { rebuildSearchIndex, isSearchReady, syncAllScoredArticlesToSearch } from './search/sync.js'
+import { rebuildSearchIndex, ensureSearchReady, isSearchReady, syncAllScoredArticlesToSearch } from './search/sync.js'
 
 // --- Startup guards ---
 if (process.env.AUTH_DISABLED === '1' && process.env.NODE_ENV !== 'development') {
@@ -198,10 +198,10 @@ void (async () => {
   for (const delay of retries) {
     if (delay) await new Promise((r) => setTimeout(r, delay))
     try {
-      await rebuildSearchIndex()
+      await ensureSearchReady()
       return
     } catch (err) {
-      log.error(`[search] Index rebuild attempt failed (next retry in ${retries[retries.indexOf(delay) + 1] ?? 'none'}ms):`, err)
+      log.error(`[search] Initial search readiness attempt failed (next retry in ${retries[retries.indexOf(delay) + 1] ?? 'none'}ms):`, err)
     }
   }
   log.error('[search] All initial rebuild attempts failed, will retry on next 6h cron')

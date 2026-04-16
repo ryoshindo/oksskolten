@@ -19,6 +19,8 @@ const prodAddDocuments = vi.fn((_docs: unknown[]) => waitTaskResult())
 const prodUpdateDocuments = vi.fn((_docs: unknown[]) => waitTaskResult())
 const prodDeleteDocument = vi.fn((_id: number) => Promise.resolve({}))
 const prodDeleteDocuments = vi.fn((_arg: unknown) => waitTaskResult())
+const prodGetStats = vi.fn().mockResolvedValue({ numberOfDocuments: 0 })
+const stagingGetStats = vi.fn().mockResolvedValue({ numberOfDocuments: 0 })
 
 const mockGetIndexes = vi.fn().mockResolvedValue({ results: [] as { uid: string }[] })
 const mockCreateIndex = vi.fn((_name: string, _opts?: unknown) => waitTaskResult())
@@ -48,6 +50,7 @@ vi.mock('./client.js', () => ({
           updateDocuments: prodUpdateDocuments,
           deleteDocument: prodDeleteDocument,
           deleteDocuments: prodDeleteDocuments,
+          getStats: stagingGetStats,
         }
       }
       return {
@@ -56,6 +59,7 @@ vi.mock('./client.js', () => ({
         deleteDocument: prodDeleteDocument,
         deleteDocuments: prodDeleteDocuments,
         updateSettings: stagingUpdateSettings,
+        getStats: prodGetStats,
       }
     },
     getIndexes: mockGetIndexes,
@@ -70,10 +74,13 @@ vi.mock('./client.js', () => ({
 import {
   syncAllScoredArticlesToSearch,
   rebuildSearchIndex,
+  ensureSearchReady,
+  isSearchReady,
   syncArticleFiltersToSearch,
   _setRebuilding,
   _setChangeLogForTest,
   _setFetchBatchForTest,
+  _setSearchReadyForTest,
 } from './sync.js'
 import { insertArticle, markArticleLiked } from '../db/articles.js'
 
@@ -102,11 +109,15 @@ function resetAllMocks(): void {
   prodUpdateDocuments.mockClear()
   prodDeleteDocument.mockClear()
   prodDeleteDocuments.mockClear()
+  prodGetStats.mockClear()
+  stagingGetStats.mockClear()
   mockGetIndexes.mockClear()
   mockCreateIndex.mockClear()
   mockDeleteIndex.mockClear()
   mockSwapIndexes.mockClear()
   mockGetIndexes.mockResolvedValue({ results: [] })
+  prodGetStats.mockResolvedValue({ numberOfDocuments: 0 })
+  stagingGetStats.mockResolvedValue({ numberOfDocuments: 0 })
   onStagingAddDocuments = null
 }
 
@@ -386,5 +397,59 @@ describe('rebuildSearchIndex', () => {
     for (const batch of allCallsOf(prodAddDocuments)) {
       expect(batch.some(d => d.id === id)).toBe(false)
     }
+  })
+})
+
+describe('ensureSearchReady', () => {
+  beforeEach(() => {
+    setupTestDb()
+    resetAllMocks()
+    _setRebuilding(false)
+    _setChangeLogForTest(null)
+    _setSearchReadyForTest(false)
+  })
+
+  it('short-circuits when articles index already has docs', async () => {
+    mockGetIndexes.mockResolvedValueOnce({ results: [{ uid: 'articles' }] })
+    prodGetStats.mockResolvedValueOnce({ numberOfDocuments: 42 })
+
+    await ensureSearchReady()
+
+    expect(isSearchReady()).toBe(true)
+    expect(stagingAddDocuments).not.toHaveBeenCalled()
+    expect(mockCreateIndex).not.toHaveBeenCalled()
+  })
+
+  it('falls back to rebuild when index exists but is empty', async () => {
+    const feedId = seedFeed()
+    seedArticle(feedId, { url: 'https://example.com/a' })
+    mockGetIndexes.mockResolvedValueOnce({ results: [{ uid: 'articles' }] })
+    prodGetStats.mockResolvedValueOnce({ numberOfDocuments: 0 })
+
+    await ensureSearchReady()
+
+    expect(stagingAddDocuments).toHaveBeenCalled()
+    expect(isSearchReady()).toBe(true)
+  })
+
+  it('falls back to rebuild when probe throws', async () => {
+    const feedId = seedFeed()
+    seedArticle(feedId, { url: 'https://example.com/a' })
+    mockGetIndexes.mockRejectedValueOnce(new Error('meili down'))
+
+    await ensureSearchReady()
+
+    expect(stagingAddDocuments).toHaveBeenCalled()
+  })
+
+  it('falls back to rebuild when articles index is missing', async () => {
+    const feedId = seedFeed()
+    seedArticle(feedId, { url: 'https://example.com/a' })
+    mockGetIndexes.mockResolvedValueOnce({ results: [] })
+
+    await ensureSearchReady()
+
+    expect(stagingAddDocuments).toHaveBeenCalled()
+    expect(prodGetStats).not.toHaveBeenCalled()
   })
 })
