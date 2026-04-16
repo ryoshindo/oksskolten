@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   arxivHtmlUrl,
-  huggingFaceToArxivAbsUrl,
+  toArxivAbsUrl,
   fetchFullTextArxivAware,
   ARXIV_HTML_STUB_THRESHOLD,
 } from './arxiv.js'
@@ -31,28 +31,41 @@ describe('arxivHtmlUrl', () => {
   })
 })
 
-describe('huggingFaceToArxivAbsUrl', () => {
+describe('toArxivAbsUrl', () => {
   it('converts huggingface papers URL to arxiv abs URL', () => {
-    expect(huggingFaceToArxivAbsUrl('https://huggingface.co/papers/2401.12345')).toBe(
+    expect(toArxivAbsUrl('https://huggingface.co/papers/2401.12345')).toBe(
       'https://arxiv.org/abs/2401.12345',
     )
   })
 
+  it('converts tldr.takara.ai URL to arxiv abs URL', () => {
+    expect(toArxivAbsUrl('https://tldr.takara.ai/p/2604.10954')).toBe(
+      'https://arxiv.org/abs/2604.10954',
+    )
+  })
+
   it('preserves version suffix', () => {
-    expect(huggingFaceToArxivAbsUrl('https://huggingface.co/papers/2401.12345v2')).toBe(
+    expect(toArxivAbsUrl('https://huggingface.co/papers/2401.12345v2')).toBe(
+      'https://arxiv.org/abs/2401.12345v2',
+    )
+    expect(toArxivAbsUrl('https://tldr.takara.ai/p/2401.12345v2')).toBe(
       'https://arxiv.org/abs/2401.12345v2',
     )
   })
 
   it('strips query and fragment', () => {
     expect(
-      huggingFaceToArxivAbsUrl('https://huggingface.co/papers/2401.12345?foo=bar#sec'),
+      toArxivAbsUrl('https://huggingface.co/papers/2401.12345?foo=bar#sec'),
+    ).toBe('https://arxiv.org/abs/2401.12345')
+    expect(
+      toArxivAbsUrl('https://tldr.takara.ai/p/2401.12345?foo=bar#sec'),
     ).toBe('https://arxiv.org/abs/2401.12345')
   })
 
-  it('returns null for non-huggingface URLs', () => {
-    expect(huggingFaceToArxivAbsUrl('https://arxiv.org/abs/2401.12345')).toBeNull()
-    expect(huggingFaceToArxivAbsUrl('https://huggingface.co/models/foo')).toBeNull()
+  it('returns null for unsupported URLs', () => {
+    expect(toArxivAbsUrl('https://arxiv.org/abs/2401.12345')).toBeNull()
+    expect(toArxivAbsUrl('https://huggingface.co/models/foo')).toBeNull()
+    expect(toArxivAbsUrl('https://takara.ai/p/2401.12345')).toBeNull()
   })
 })
 
@@ -134,6 +147,17 @@ describe('fetchFullTextArxivAware', () => {
     const htmlUrl = 'https://arxiv.org/html/2401.12345'
     spy.mockResolvedValueOnce(result('x'.repeat(ARXIV_HTML_STUB_THRESHOLD + 100)))
     const r = await fetchFullTextArxivAware(hfUrl)
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith(htmlUrl, undefined)
+    expect(r.source).toBe('html')
+    expect(r.sourceUrl).toBe(htmlUrl)
+  })
+
+  it('rewrites tldr.takara.ai URL and fetches arxiv html full text', async () => {
+    const tldrUrl = 'https://tldr.takara.ai/p/2401.12345'
+    const htmlUrl = 'https://arxiv.org/html/2401.12345'
+    spy.mockResolvedValueOnce(result('x'.repeat(ARXIV_HTML_STUB_THRESHOLD + 100)))
+    const r = await fetchFullTextArxivAware(tldrUrl)
     expect(spy).toHaveBeenCalledTimes(1)
     expect(spy).toHaveBeenCalledWith(htmlUrl, undefined)
     expect(r.source).toBe('html')

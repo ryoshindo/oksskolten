@@ -1,15 +1,16 @@
-# Backfill Hugging Face papers
+# Backfill HF / takara.ai wrapper articles
 
-For `huggingface.co/papers/<id>` articles ingested before HF→arxiv URL
-rewriting landed in `server/fetcher/arxiv.ts`. The HF papers page just
-wraps the arxiv abstract, so the extracted `full_text` was effectively
-the abstract only.
+For `huggingface.co/papers/<id>` and `tldr.takara.ai/p/<id>` articles
+ingested before the URL rewriter in `server/fetcher/arxiv.ts` learned
+to resolve them to `arxiv.org/abs/<id>`. Both wrappers expose only the
+arxiv abstract, so the extracted `full_text` was effectively the
+abstract only.
 
 The rewrite changes the ingestion pipeline, but **existing rows are not
 migrated automatically** — this document covers the one-off refetch.
 
-The `/api/admin/refetch-arxiv-html` endpoint accepts HF papers URLs
-directly; no URL munging needed from the client.
+The `/api/admin/refetch-arxiv-html` endpoint accepts both wrapper URL
+shapes directly; no URL munging needed from the client.
 
 ## 1. List candidate articles
 
@@ -20,6 +21,7 @@ sqlite3 ./data/rss.db \
   "SELECT id, LENGTH(full_text) AS len, url \
    FROM active_articles \
    WHERE url LIKE 'https://huggingface.co/papers/%' \
+      OR url LIKE 'https://tldr.takara.ai/p/%' \
    ORDER BY len;"
 ```
 
@@ -35,7 +37,8 @@ like an abstract) and loop:
 ```bash
 sqlite3 ./data/rss.db \
   "SELECT id FROM active_articles \
-   WHERE url LIKE 'https://huggingface.co/papers/%' \
+   WHERE (url LIKE 'https://huggingface.co/papers/%' \
+          OR url LIKE 'https://tldr.takara.ai/p/%') \
      AND LENGTH(full_text) < 3000;" \
   | while read id; do
     curl -s -X POST "$OKS_API_URL/api/admin/refetch-arxiv-html" \
@@ -47,12 +50,23 @@ sqlite3 ./data/rss.db \
   done
 ```
 
-To refetch every HF paper regardless of length, drop the
+To refetch every wrapper article regardless of length, drop the
 `LENGTH(full_text) < 3000` clause.
+
+If you cannot reach the SQLite file directly (e.g. the server holds an
+exclusive handle, or the process runs against a remote libSQL), pull
+the IDs from the admin status endpoint instead — feed 24 is the
+takara.ai HF Daily Papers feed in this deployment:
+
+```bash
+curl -s "$OKS_API_URL/api/admin/arxiv-status?feed_id=24" \
+  -H "Authorization: Bearer $OKS_TOKEN" \
+  | jq '.articles[] | select(.full_text_length < 3000) | .id'
+```
 
 ## 3. Verify
 
-Re-run step 1 and confirm `len` grew for most rows. HF papers whose
+Re-run step 1 and confirm `len` grew for most rows. Wrappers whose
 arxiv paper has an html version should end up > 5k chars. For papers
 without html, the response will report `"source": "abs"` and `len`
 will remain around the abstract size — that's the best we can get.

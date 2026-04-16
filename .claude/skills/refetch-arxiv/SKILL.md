@@ -1,15 +1,16 @@
 ---
 name: refetch-arxiv
-description: Backfill full_text for arxiv and Hugging Face papers articles by fetching the arxiv html full text (abs fallback for papers without an HTML version)
+description: Backfill full_text for arxiv, Hugging Face papers, and takara.ai tldr articles by fetching the arxiv html full text (abs fallback for papers without an HTML version)
 user_invocable: true
 ---
 
 The arxiv RSS feeds (`cs.IR`, `cs.CL`, …) only ship the abstract, and
-Hugging Face papers pages (`huggingface.co/papers/<id>`) just wrap the
-same abstract. Both pipelines now normalize to arxiv and invoke
-`fetchFullTextArxivAware` (`server/fetcher/arxiv.ts`) at ingestion time,
-so **new articles already get their html full text automatically** — no
-manual backfill needed.
+upstream wrappers like `huggingface.co/papers/<id>` and
+`tldr.takara.ai/p/<id>` just re-expose the same abstract. All three
+pipelines now normalize to arxiv and invoke `fetchFullTextArxivAware`
+(`server/fetcher/arxiv.ts`) at ingestion time, so **new articles
+already get their html full text automatically** — no manual backfill
+needed.
 
 This skill is for the leftover cases:
 
@@ -29,8 +30,8 @@ Pick one based on `$ARGUMENTS`:
 - Empty / a feed_id / `status` / `status <feed_id>` →
   arxiv-feed-scoped backfill. Read `references/arxiv-feeds.md`.
 - `hf` / `huggingface` →
-  URL-pattern based Hugging Face papers backfill. Read
-  `references/huggingface-papers.md`.
+  URL-pattern based backfill for Hugging Face papers and takara.ai
+  tldr wrappers. Read `references/huggingface-papers.md`.
 
 ## Common prerequisites
 
@@ -40,7 +41,8 @@ Pick one based on `$ARGUMENTS`:
 Both should already be exported via `.envrc` / `direnv allow`.
 
 The refetch endpoint is `POST /api/admin/refetch-arxiv-html`, which
-accepts both `arxiv.org/abs/<id>` and `huggingface.co/papers/<id>`.
+accepts `arxiv.org/abs/<id>`, `huggingface.co/papers/<id>`, and
+`tldr.takara.ai/p/<id>`.
 
 ## Large backfills (100+ articles)
 

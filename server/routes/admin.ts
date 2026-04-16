@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { fetchAllFeeds, fetchProgress, getFeedState, type FetchProgressEvent } from '../fetcher.js'
 import {
   arxivHtmlUrl,
-  huggingFaceToArxivAbsUrl,
+  toArxivAbsUrl,
   fetchFullTextArxivAware,
   ARXIV_HTML_STUB_THRESHOLD,
 } from '../fetcher/arxiv.js'
@@ -98,10 +98,10 @@ export async function adminRoutes(api: FastifyInstance): Promise<void> {
         return
       }
 
-      const absUrl = huggingFaceToArxivAbsUrl(article.url) ?? article.url
+      const absUrl = toArxivAbsUrl(article.url) ?? article.url
       if (!arxivHtmlUrl(absUrl)) {
         reply.status(400).send({
-          error: 'Article URL is not an arxiv abs or huggingface papers URL',
+          error: 'Article URL does not map to an arxiv paper (expected arxiv.org/abs/<id>, huggingface.co/papers/<id>, or tldr.takara.ai/p/<id>)',
           url: article.url,
         })
         return

@@ -2,11 +2,14 @@ import { fetchFullText, type FetchFullTextOptions } from './content.js'
 import type { ParseHtmlResult } from './contentWorker.js'
 
 const ARXIV_ABS_RE = /^https?:\/\/arxiv\.org\/abs\/([^/?#]+)/i
-// Hugging Face papers pages (huggingface.co/papers/<arxiv-id>) wrap the arxiv
-// abstract with extra HF metadata, so the extracted body is effectively the
-// abstract only. The path segment is the arxiv paper ID, so we rewrite to
-// arxiv.org/abs/<id> and let the arxiv pipeline pick the html full text.
-const HF_PAPERS_RE = /^https?:\/\/huggingface\.co\/papers\/([^/?#]+)/i
+// Wrapper pages whose URL path segment is the arxiv paper ID. Both the Hugging
+// Face papers page and the takara.ai "tldr" aggregator embed arxiv abstracts
+// rather than the full text, so we rewrite to arxiv.org/abs/<id> and let the
+// arxiv pipeline pick the html full text.
+const ARXIV_ID_WRAPPER_REs: ReadonlyArray<RegExp> = [
+  /^https?:\/\/huggingface\.co\/papers\/([^/?#]+)/i,
+  /^https?:\/\/tldr\.takara\.ai\/p\/([^/?#]+)/i,
+]
 
 // arXiv HTML pages for papers without a rendered HTML version return a near-empty
 // stub (~300 bytes after Readability). Anything under this is treated as "no HTML
@@ -25,16 +28,19 @@ export function arxivHtmlUrl(absUrl: string): string | null {
   return m ? `https://arxiv.org/html/${m[1]}` : null
 }
 
-export function huggingFaceToArxivAbsUrl(url: string): string | null {
-  const m = HF_PAPERS_RE.exec(url)
-  return m ? `https://arxiv.org/abs/${m[1]}` : null
+export function toArxivAbsUrl(url: string): string | null {
+  for (const re of ARXIV_ID_WRAPPER_REs) {
+    const m = url.match(re)
+    if (m) return `https://arxiv.org/abs/${m[1]}`
+  }
+  return null
 }
 
 export async function fetchFullTextArxivAware(
   url: string,
   options?: FetchFullTextOptions,
 ): Promise<FetchFullTextArxivAwareResult> {
-  const absUrl = huggingFaceToArxivAbsUrl(url) ?? url
+  const absUrl = toArxivAbsUrl(url) ?? url
   const htmlUrl = arxivHtmlUrl(absUrl)
   if (!htmlUrl) {
     const r = await fetchFullText(url, options)
