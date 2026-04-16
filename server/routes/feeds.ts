@@ -31,7 +31,15 @@ const httpsUrl = z
   .string({ error: 'url is required' })
   .min(1, 'url is required')
   .url('must be a valid URL')
-  .refine((u) => u.startsWith('https://'), { message: 'Only https:// URLs are allowed' })
+  .refine((u) => {
+    if (u.startsWith('https://')) return true
+    try {
+      const { protocol, hostname } = new URL(u)
+      return protocol === 'http:' && (hostname === 'localhost' || hostname === '127.0.0.1')
+    } catch {
+      return false
+    }
+  }, { message: 'Only https:// URLs (or http://localhost) are allowed' })
 
 const DiscoverTitleQuery = z.object({
   url: httpsUrl,

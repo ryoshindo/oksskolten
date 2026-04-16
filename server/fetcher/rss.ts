@@ -241,6 +241,11 @@ export async function fetchAndParseRss(feed: Feed, opts?: { skipCache?: boolean 
     throw err
   }
 
+  // Drop RSS-Bridge error entries before Fallback B so sites where the bridge itself failed (e.g. Cloudflare 403) still trigger the FlareSolverr direct-scrape path.
+  if (isCssBridge) {
+    items = items.filter(item => !RSS_BRIDGE_ERROR_RE.test(item.title))
+  }
+
   // Fallback B: CssSelectorBridge returned 0 items → FlareSolverr direct scrape
   if (items.length === 0 && isCssBridge) {
     return { ...result, items: cleanItems(assignCssBridgePseudoDates(await fetchCssSelectorViaFlareSolverr(rssUrl), rssUrl)) }
